@@ -14,34 +14,22 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.strategies.ddp import DDPStrategy
 from torch.utils.data import DataLoader
 
-from data.carla_dataset import CarlaDetection
-from data.open_image import OIDetection
-from data.visual_genome import VGDetection
+from egtr.data.carla_dataset import CarlaDetection
+from egtr.data.open_image import OIDetection
+from egtr.data.visual_genome import VGDetection
 from egtr.deformable_detr import (
     DeformableDetrConfig,
     DeformableDetrFeatureExtractor,
     DeformableDetrFeatureExtractorWithAugmentor,
     DeformableDetrForObjectDetection,
 )
+from egtr.tools import collate_fn
 from lib.evaluation.coco_eval import CocoEvaluator
 from lib.evaluation.oi_eval import OICocoEvaluator
 from util.misc import use_deterministic_algorithms
 
 
 seed_everything(42, workers=True)
-
-
-def collate_fn(batch, feature_extractor):
-    pixel_values = [item[0] for item in batch]
-    encoding = feature_extractor.pad_and_create_pixel_mask(
-        pixel_values, return_tensors="pt"
-    )
-    labels = [item[1] for item in batch]
-    batch = {}
-    batch["pixel_values"] = encoding["pixel_values"]
-    batch["pixel_mask"] = encoding["pixel_mask"]
-    batch["labels"] = labels
-    return batch
 
 
 class Detr(pl.LightningModule):

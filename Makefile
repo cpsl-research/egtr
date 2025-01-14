@@ -1,7 +1,7 @@
 NAME := egtr
 INSTALL_STAMP := .install.stamp
 POETRY := $(shell command -v poetry 2> /dev/null)
-PYFOLDERS := data egtr tools
+PYFOLDERS := egtr tools
 .DEFAULT_GOAL := help
 
 .PHONY: help

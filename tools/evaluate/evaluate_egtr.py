@@ -10,25 +10,27 @@ import json
 from glob import glob
 
 import torch
-from submodules.egtr.pretrain.train.train_egtr import collate_fn, evaluate_batch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data.carla_dataset import CarlaDataset, CarlaDetection
-from data.open_image import OIDataset
-from data.visual_genome import VGDataset
+from egtr.data.carla_dataset import CarlaDataset, CarlaDetection
+from egtr.data.open_image import OIDataset
+from egtr.data.visual_genome import VGDataset
 from egtr.deformable_detr import (
     DeformableDetrConfig,
     DeformableDetrFeatureExtractor,
     DeformableDetrForObjectDetection,
 )
 from egtr.egtr import DetrForSceneGraphGeneration
+from egtr.tools import collate_fn
 from lib.evaluation.coco_eval import CocoEvaluator
 from lib.evaluation.oi_eval import OIEvaluator
 from lib.evaluation.sg_eval import (
     BasicSceneGraphEvaluator,
     calculate_mR_from_evaluator_list,
 )
+
+from ..train import evaluate_batch
 
 
 @torch.no_grad()

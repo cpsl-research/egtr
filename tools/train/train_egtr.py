@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 import pytorch_lightning as pl
 import torch
+from data.open_image import OIDataset, oi_get_statistics
+from data.visual_genome import VGDataset, vg_get_statistics
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
@@ -19,8 +21,6 @@ from pytorch_lightning.strategies.ddp import DDPStrategy
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 from torch.utils.data import DataLoader
 
-from data.open_image import OIDataset, oi_get_statistics
-from data.visual_genome import VGDataset, vg_get_statistics
 from egtr.deformable_detr import (
     DeformableDetrConfig,
     DeformableDetrFeatureExtractor,
