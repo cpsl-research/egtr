@@ -1,3 +1,9 @@
+.install.stamp
+**tfevents**
+*.ckpt
+*.pt
+**batch__**
+
 # ninja
 *.out
 *.ninja*

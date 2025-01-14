@@ -21,6 +21,12 @@ from torch.utils.data import DataLoader
 
 from data.open_image import OIDataset, oi_get_statistics
 from data.visual_genome import VGDataset, vg_get_statistics
+from egtr.deformable_detr import (
+    DeformableDetrConfig,
+    DeformableDetrFeatureExtractor,
+    DeformableDetrFeatureExtractorWithAugmentorNoCrop,
+)
+from egtr.egtr import DetrForSceneGraphGeneration
 from lib.evaluation.coco_eval import CocoEvaluator
 from lib.evaluation.oi_eval import OIEvaluator
 from lib.evaluation.sg_eval import (
@@ -28,14 +34,9 @@ from lib.evaluation.sg_eval import (
     calculate_mR_from_evaluator_list,
 )
 from lib.pytorch_misc import argsort_desc
-from model.deformable_detr import (
-    DeformableDetrConfig,
-    DeformableDetrFeatureExtractor,
-    DeformableDetrFeatureExtractorWithAugmentorNoCrop,
-)
-from model.egtr import DetrForSceneGraphGeneration
 from util.box_ops import rescale_bboxes
 from util.misc import use_deterministic_algorithms
+
 
 seed_everything(42, workers=True)
 

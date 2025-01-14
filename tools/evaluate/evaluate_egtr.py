@@ -1,39 +1,53 @@
 # EGTR
 # Copyright (c) 2024-present NAVER Cloud Corp.
 # Apache-2.0
+"""
+Modifications: added carla compatibility
+"""
 
 import argparse
 import json
 from glob import glob
 
 import torch
+from submodules.egtr.pretrain.train.train_egtr import collate_fn, evaluate_batch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from data.carla_dataset import CarlaDataset, CarlaDetection
 from data.open_image import OIDataset
 from data.visual_genome import VGDataset
+from egtr.deformable_detr import (
+    DeformableDetrConfig,
+    DeformableDetrFeatureExtractor,
+    DeformableDetrForObjectDetection,
+)
+from egtr.egtr import DetrForSceneGraphGeneration
 from lib.evaluation.coco_eval import CocoEvaluator
 from lib.evaluation.oi_eval import OIEvaluator
 from lib.evaluation.sg_eval import (
     BasicSceneGraphEvaluator,
     calculate_mR_from_evaluator_list,
 )
-from model.deformable_detr import DeformableDetrConfig, DeformableDetrFeatureExtractor
-from model.egtr import DetrForSceneGraphGeneration
-from train_egtr import collate_fn, evaluate_batch
 
 
 @torch.no_grad()
-def calculate_fps(model, dataloader):
+def calculate_fps(model, dataloader, detr_only=False):
     model.eval()
     for batch in tqdm(dataloader):
-        outputs = model(
-            pixel_values=batch["pixel_values"].cuda(),
-            pixel_mask=batch["pixel_mask"].cuda(),
-            output_attentions=False,
-            output_attention_states=True,
-            output_hidden_states=True,
-        )
+        if detr_only:
+            outputs = model(
+                pixel_values=batch["pixel_values"].cuda(),
+                pixel_mask=batch["pixel_mask"].cuda(),
+            )
+        else:
+            outputs = model(
+                pixel_values=batch["pixel_values"].cuda(),
+                pixel_mask=batch["pixel_mask"].cuda(),
+                output_attentions=False,
+                output_attention_states=True,
+                output_hidden_states=True,
+            )
 
 
 # Reference: https://github.com/facebookresearch/detr/blob/main/engine.py
@@ -47,6 +61,7 @@ def evaluate(
     oi_evaluator=None,
     coco_evaluator=None,
     feature_extractor=None,
+    detr_only=False,
 ):
     metric_dict = {}
     model.eval()
@@ -65,24 +80,31 @@ def evaluate(
             )
 
     for batch in tqdm(dataloader):
-        outputs = model(
-            pixel_values=batch["pixel_values"].cuda(),
-            pixel_mask=batch["pixel_mask"].cuda(),
-            output_attentions=False,
-            output_attention_states=True,
-            output_hidden_states=True,
-        )
+        if detr_only:
+            outputs = model(
+                pixel_values=batch["pixel_values"].cuda(),
+                pixel_mask=batch["pixel_mask"].cuda(),
+            )
+        else:
+            outputs = model(
+                pixel_values=batch["pixel_values"].cuda(),
+                pixel_mask=batch["pixel_mask"].cuda(),
+                output_attentions=False,
+                output_attention_states=True,
+                output_hidden_states=True,
+            )
         targets = batch["labels"]
-        evaluate_batch(
-            outputs,
-            targets,
-            multiple_sgg_evaluator,
-            multiple_sgg_evaluator_list,
-            single_sgg_evaluator,
-            single_sgg_evaluator_list,
-            oi_evaluator,
-            num_labels,
-        )
+        if not detr_only:
+            evaluate_batch(
+                outputs,
+                targets,
+                multiple_sgg_evaluator,
+                multiple_sgg_evaluator_list,
+                single_sgg_evaluator,
+                single_sgg_evaluator_list,
+                oi_evaluator,
+                num_labels,
+            )
         if coco_evaluator is not None:
             orig_target_sizes = torch.stack(
                 [target["orig_size"] for target in targets], dim=0
@@ -166,6 +188,9 @@ if __name__ == "__main__":
     parser.add_argument("--max_size", type=int, default=1333)
     parser.add_argument("--infer_only", type=str2bool, default=False)
 
+    # only evaluating detr
+    parser.add_argument("--detr_only", action="store_true")
+
     # Speed up
     parser.add_argument("--num_workers", type=int, default=4)
     args, unknown = parser.parse_known_args()  # to ignore args when training
@@ -177,12 +202,36 @@ if __name__ == "__main__":
 
     # Dataset
     if "visual_genome" in args.data_path:
-        test_dataset = VGDataset(
-            data_folder=args.data_path,
-            feature_extractor=feature_extractor,
-            split=args.split,
-            num_object_queries=args.num_queries,
-        )
+        if args.detr_only:
+            raise NotImplementedError
+        else:
+            test_dataset = VGDataset(
+                data_folder=args.data_path,
+                feature_extractor=feature_extractor,
+                split=args.split,
+                num_object_queries=args.num_queries,
+            )
+            id2label = {
+                k - 1: v["name"] for k, v in test_dataset.coco.cats.items()
+            }  # 0 ~ 149
+            coco_evaluator = CocoEvaluator(
+                test_dataset.coco, ["bbox"]
+            )  # initialize evaluator with ground truths
+            oi_evaluator = None
+    elif "carla" in args.data_path.lower():
+        if args.detr_only:
+            test_dataset = CarlaDetection(
+                data_folder=args.data_path,
+                feature_extractor=feature_extractor,
+                split=args.split,
+            )
+        else:
+            test_dataset = CarlaDataset(
+                data_folder=args.data_path,
+                feature_extractor=feature_extractor,
+                split=args.split,
+                num_object_queries=args.num_queries,
+            )
         id2label = {
             k - 1: v["name"] for k, v in test_dataset.coco.cats.items()
         }  # 0 ~ 149
@@ -191,17 +240,22 @@ if __name__ == "__main__":
         )  # initialize evaluator with ground truths
         oi_evaluator = None
     elif "open-image" in args.data_path:
-        test_dataset = OIDataset(
-            data_folder=args.data_path,
-            feature_extractor=feature_extractor,
-            split=args.split,
-            num_object_queries=args.num_queries,
-        )
-        id2label = test_dataset.classes_to_ind  # 0 ~ 600
-        oi_evaluator = OIEvaluator(
-            test_dataset.rel_categories, test_dataset.ind_to_classes
-        )
-        coco_evaluator = None
+        if args.detr_only:
+            raise NotImplementedError
+        else:
+            test_dataset = OIDataset(
+                data_folder=args.data_path,
+                feature_extractor=feature_extractor,
+                split=args.split,
+                num_object_queries=args.num_queries,
+            )
+            id2label = test_dataset.classes_to_ind  # 0 ~ 600
+            oi_evaluator = OIEvaluator(
+                test_dataset.rel_categories, test_dataset.ind_to_classes
+            )
+            coco_evaluator = None
+    else:
+        raise NotImplementedError(args.data_path)
 
     # Dataloader
     test_dataloader = DataLoader(
@@ -219,6 +273,7 @@ if __name__ == "__main__":
     if args.eval_multiple_preds:
         multiple_sgg_evaluator = BasicSceneGraphEvaluator.all_modes(multiple_preds=True)
     if args.eval_single_preds:
+        breakpoint()
         single_sgg_evaluator = BasicSceneGraphEvaluator.all_modes(multiple_preds=False)
 
     # Model
@@ -226,9 +281,12 @@ if __name__ == "__main__":
     config.logit_adjustment = args.logit_adjustment
     config.logit_adj_tau = args.logit_adj_tau
 
-    model = DetrForSceneGraphGeneration.from_pretrained(
-        args.architecture, config=config, ignore_mismatched_sizes=True
-    )
+    if args.detr_only:
+        model = DeformableDetrForObjectDetection(config=config)
+    else:
+        model = DetrForSceneGraphGeneration.from_pretrained(
+            args.architecture, config=config, ignore_mismatched_sizes=True
+        )
     ckpt_path = sorted(
         glob(f"{args.artifact_path}/checkpoints/epoch=*.ckpt"),
         key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
@@ -243,7 +301,7 @@ if __name__ == "__main__":
 
     # FPS
     if args.infer_only:
-        calculate_fps(model, test_dataloader)
+        calculate_fps(model, test_dataloader, detr_only=args.detr_only)
     # Eval
     else:
         metric = evaluate(
@@ -255,6 +313,7 @@ if __name__ == "__main__":
             oi_evaluator,
             coco_evaluator,
             feature_extractor,
+            detr_only=args.detr_only,
         )
 
         # Save eval metric

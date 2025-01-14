@@ -320,7 +320,7 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
             outputs_coord = outputs_coord.permute(1, 0, 2, 3)
 
         _, num_object_queries, _ = logits.shape
-        unscaling = self.head_dim ** 0.5
+        unscaling = self.head_dim**0.5
 
         # Get self-attention byproducts from deformable detr
         decoder_attention_queries = outputs[

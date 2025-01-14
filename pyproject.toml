@@ -1,0 +1,57 @@
+[tool.poetry]
+name = "egtr"
+version = "0.1.0-alpha.1"
+description = "EGTR project"
+authors = ["Spencer Hallyburton <spencer.hallyburton@duke.edu>"]
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/cpsl-research/egtr"
+keywords = ["security", "autonomy", "scene graph", "neuro-symbolic"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+]
+
+[tool.poetry.dependencies]
+python = "~3.10"
+setuptools = "~64"
+transformers = "~4.18"
+pytorch-lightning = "~1.6"
+
+# to be compatible with avstack
+torch = [
+    {url="https://download.pytorch.org/whl/cu117/torch-1.13.1%2Bcu117-cp310-cp310-linux_x86_64.whl", markers="platform_machine == 'x86_64'", optional=true},
+    {url="https://download.pytorch.org/whl/torch-1.13.1-cp310-cp310-manylinux2014_aarch64.whl#sha256=d9fe785d375f2e26a5d5eba5de91f89e6a3be5d11efb497e76705fdf93fa3c2e", markers="platform_machine == 'aarch64'", optional=true},
+]
+torchvision = [
+    {url="https://download.pytorch.org/whl/cu117/torchvision-0.14.1%2Bcu117-cp310-cp310-linux_x86_64.whl", markers="platform_machine == 'x86_64'", optional=true},
+    {url="https://download.pytorch.org/whl/torchvision-0.14.1-cp310-cp310-manylinux2014_aarch64.whl#sha256=8a9eb773a2fa8f516e404ac09c059fb14e6882c48fdbb9c946327d2ce5dba6cd", markers="platform_machine == 'aarch64'", optional=true},
+]
+
+[tool.poetry.extras]
+percep = ["torch", "torchvision"]
+
+[tool.poetry.group.test.dependencies]
+snakeviz="^2.1.1"
+pytest = "^7"
+pytest-cov = "^4"
+bandit = "^1.7"
+black = {extras = ["jupyter"], version = "~22.12.0"}
+mypy = "^0"
+isort = "^5.11"
+flake8 = "^5.0"
+autoflake = "^1"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q -s"
+testpaths = [
+    "tests",
+    "integration",
+]
+
+[build-system]
+requires = [
+    "poetry-core",
+]
+build-backend = "poetry.core.masonry.api"

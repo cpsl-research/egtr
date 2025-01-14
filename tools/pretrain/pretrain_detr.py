@@ -14,17 +14,19 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.strategies.ddp import DDPStrategy
 from torch.utils.data import DataLoader
 
+from data.carla_dataset import CarlaDetection
 from data.open_image import OIDetection
 from data.visual_genome import VGDetection
-from lib.evaluation.coco_eval import CocoEvaluator
-from lib.evaluation.oi_eval import OICocoEvaluator
-from model.deformable_detr import (
+from egtr.deformable_detr import (
     DeformableDetrConfig,
     DeformableDetrFeatureExtractor,
     DeformableDetrFeatureExtractorWithAugmentor,
     DeformableDetrForObjectDetection,
 )
+from lib.evaluation.coco_eval import CocoEvaluator
+from lib.evaluation.oi_eval import OICocoEvaluator
 from util.misc import use_deterministic_algorithms
+
 
 seed_everything(42, workers=True)
 
@@ -72,6 +74,7 @@ class Detr(pl.LightningModule):
         self.model.model.backbone.load_state_dict(
             torch.load(f"{backbone_dirpath}/{config.backbone}.pt")
         )
+        self.config = config
 
         # see https://github.com/PyTorchLightning/pytorch-lightning/pull/1896
         self.lr = lr
@@ -232,7 +235,7 @@ if __name__ == "__main__":
     # Training
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--accumulate", type=int, default=1)
-    parser.add_argument("--gpus", type=int, default=8)
+    parser.add_argument("--gpus", type=int, default=2)
     parser.add_argument("--max_epochs", type=int, default=150)
     parser.add_argument("--max_epochs_finetune", type=int, default=50)
     parser.add_argument("--lr_backbone", type=float, default=1e-5)
@@ -282,6 +285,18 @@ if __name__ == "__main__":
         )
         cats = train_dataset.coco.cats
         id2label = {k - 1: v["name"] for k, v in cats.items()}  # 0 ~ 149
+    elif "carla" in args.data_path.lower():
+        train_dataset = CarlaDetection(
+            data_folder=args.data_path,
+            feature_extractor=feature_extractor_train,
+            split="train",
+            debug=args.debug,
+        )
+        val_dataset = CarlaDetection(
+            data_folder=args.data_path, feature_extractor=feature_extractor, split="val"
+        )
+        cats = train_dataset.coco.cats
+        id2label = {k - 1: v["name"] for k, v in cats.items()}
     else:
         train_dataset = OIDetection(
             data_folder=args.data_path,
@@ -317,7 +332,7 @@ if __name__ == "__main__":
 
     # Evaluator
     if args.eval_when_train_end:
-        if "visual_genome" in args.data_path:
+        if ("visual_genome" in args.data_path) or ("carla" in args.data_path.lower()):
             coco_evaluator = CocoEvaluator(
                 val_dataset.coco, ["bbox"]
             )  # initialize evaluator with ground truths
@@ -327,6 +342,8 @@ if __name__ == "__main__":
                 train_dataset.rel_categories, train_dataset.ind_to_classes
             )
             coco_evaluator = None
+        else:
+            raise NotImplementedError(args.data_path)
     else:
         coco_evaluator = None
         oi_coco_evaluator = None
@@ -374,6 +391,9 @@ if __name__ == "__main__":
         oi_coco_evaluator=oi_coco_evaluator,
         feature_extractor=feature_extractor,
     )
+
+    # Save config
+    module.config.save_pretrained(logger.log_dir)
 
     # Callback
     checkpoint_callback = ModelCheckpoint(
