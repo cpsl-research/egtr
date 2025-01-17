@@ -16,13 +16,17 @@ class CarlaDetection(torchvision.datasets.CocoDetection):
         self.split = split
         self.debug = debug
 
+    def get_image(self, idx):
+        img, _ = super(CarlaDetection, self).__getitem__(idx)
+        return img
+
     def __getitem__(self, idx):
         # read in PIL image and target in COCO format
         img, target = super(CarlaDetection, self).__getitem__(idx)
 
         # preprocess image and target (converting target to DETR format, resizing + normalization of both image and target)
         image_id = self.ids[idx]
-        target = {"image_id": image_id, "annotations": target}
+        target = {"image_id": image_id, "annotations": target, "file_name": None}
         encoding = self.feature_extractor(
             images=img, annotations=target, return_tensors="pt"
         )
@@ -55,7 +59,7 @@ class CarlaDataset(CarlaDetection):
 
         # preprocess image and target (converting target to DETR format, resizing + normalization of both image and target)
         image_id = self.ids[idx]
-        target = {"image_id": image_id, "annotations": target}
+        target = {"image_id": image_id, "annotations": target, "file_name": None}
         rel_list = self.rel[str(image_id)]
         encoding = self.feature_extractor(
             images=img, annotations=target, return_tensors="pt"

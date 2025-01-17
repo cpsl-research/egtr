@@ -64,9 +64,6 @@ def main(args):
                             calib = CDM.get_calibration(
                                 frame=frame, sensor=sensor, agent=agent
                             )
-                            boxes_2d = objs.apply_and_return(
-                                "getattr", "box"
-                            ).apply_and_return("project_to_2d_bbox", calib=calib)
 
                             # symbolic link to image
                             img_filename = img_filepath.split("/")[-1]
@@ -91,16 +88,31 @@ def main(args):
                             )
 
                             # add annotation information
-                            for box in boxes_2d:
+                            for obj in objs:
+                                # pull off boes
+                                box_3d = obj.box
+                                box_2d = box_3d.project_to_2d_bbox(calib=calib)
+
+                                # compute additional attributes
+                                volume_3d = box_3d.volume
+                                orientation_3d = box_3d.yaw
+                                fraction_visible = obj.visible_fraction
+                                if fraction_visible is None:
+                                    raise ValueError(fraction_visible)
+
+                                # store annotation details
                                 annotations.append(
                                     {
                                         "id": idx_ann,
-                                        "category_id": category_ids[box.obj_type],
+                                        "category_id": category_ids[obj.obj_type],
                                         "iscrowd": 0,
                                         "segmentation": [[]],  # TODO: segmentation mask
                                         "area": 1000,  # TODO: segmentation area
+                                        "volume_3d": volume_3d,
+                                        "orientation_3d": orientation_3d,
+                                        "fraction_visible": fraction_visible,
                                         "image_id": idx_img,
-                                        "bbox": box.box2d_xywh,
+                                        "bbox": box_2d.box2d_xywh,
                                     }
                                 )
                                 idx_ann += 1

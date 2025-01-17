@@ -55,6 +55,7 @@ class Detr(pl.LightningModule):
         config.architecture = architecture
         config.auxiliary_loss = auxiliary_loss
         config.num_labels = max(id2label.keys()) + 1
+        self._num_labels = max(id2label.keys()) + 1
         config.num_queries = num_queries
         config.ce_loss_coefficient = ce_loss_coefficient
         config.output_attention_states = False
@@ -190,6 +191,17 @@ class Detr(pl.LightningModule):
         return val_dataloader
 
 
+def get_last_ckpt(ckpt_dir):
+    if os.path.exists(f"{ckpt_dir}/last.ckpt"):
+        ckpt_path = f"{ckpt_dir}/last.ckpt"
+    else:
+        ckpt_path = sorted(
+            glob(f"{ckpt_dir}/epoch=*.ckpt"),
+            key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
+        )[-1]
+    return ckpt_path
+
+
 if __name__ == "__main__":
 
     def str2bool(v):
@@ -211,6 +223,8 @@ if __name__ == "__main__":
         required=True,
     )
     parser.add_argument("--backbone_dirpath", type=str, required=True)
+    parser.add_argument("--initial_ckpt_dir", type=str, required=False)
+    parser.add_argument("--load_initial_ckpt", type=str2bool, default=False)
 
     # Architecture
     parser.add_argument("--architecture", type=str, default="SenseTime/deformable-detr")
@@ -352,16 +366,25 @@ if __name__ == "__main__":
 
     # Trainer setting
     logger = TensorBoardLogger(save_dir, name=name, version=version)
-    if os.path.exists(f"{logger.log_dir}/checkpoints"):
-        if os.path.exists(f"{logger.log_dir}/checkpoints/last.ckpt"):
-            ckpt_path = f"{logger.log_dir}/checkpoints/last.ckpt"
+
+    # load a set checkpoint, if available and NOT resume
+    if (not args.resume) and args.initial_ckpt_dir:
+        ckpt_dir = f"{args.initial_ckpt_dir}/checkpoints"
+        if not os.path.exists(ckpt_dir):
+            raise FileNotFoundError(ckpt_dir)
         else:
-            ckpt_path = sorted(
-                glob(f"{logger.log_dir}/checkpoints/epoch=*.ckpt"),
-                key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
-            )[-1]
+            ckpt_path = get_last_ckpt(ckpt_dir)
+        if "visual_genome" in args.initial_ckpt_dir:
+            num_labels_temp = 150
+        else:
+            raise NotImplementedError(args.initial_ckpt_dir)
     else:
-        ckpt_path = None
+        ckpt_dir = f"{logger.log_dir}/checkpoints"
+        if os.path.exists(ckpt_dir):
+            ckpt_path = get_last_ckpt(ckpt_dir)
+        else:
+            ckpt_path = None
+        num_labels_temp = None
 
     # Module
     module = Detr(
@@ -378,6 +401,7 @@ if __name__ == "__main__":
         coco_evaluator=coco_evaluator,
         oi_coco_evaluator=oi_coco_evaluator,
         feature_extractor=feature_extractor,
+        # num_labels_temp=num_labels_temp,
     )
 
     # Save config

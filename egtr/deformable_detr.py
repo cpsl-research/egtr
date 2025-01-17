@@ -205,6 +205,7 @@ class DeformableDetrConfig(PretrainedConfig):
         two_stage=False,
         two_stage_num_proposals=300,
         with_box_refine=False,
+        n_attributes=0,
         class_cost=1,
         bbox_cost=5,
         giou_cost=2,
@@ -246,6 +247,8 @@ class DeformableDetrConfig(PretrainedConfig):
         self.with_box_refine = with_box_refine
         if two_stage is True and with_box_refine is False:
             raise ValueError("If two_stage is True, with_box_refine must be True.")
+        # box/attribute predictions
+        self.n_attributes = n_attributes
         # Hungarian matcher
         self.class_cost = class_cost
         self.bbox_cost = bbox_cost
@@ -555,6 +558,8 @@ class DeformableDetrModelOutput(ModelOutput):
             foreground and background).
         enc_outputs_coord_logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, 4)`, *optional*, returned when `config.with_box_refine=True` and `config.two_stage=True`):
             Logits of predicted bounding boxes coordinates in the first stage.
+        enc_outputs_attr_logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, n_attr)`, *optional*, returned when `config.with_box_refine=True` and `config.two_stage=True`):
+            Logits of predicted attributes in the first stage
     """
 
     init_reference_points: torch.FloatTensor = None
@@ -569,6 +574,7 @@ class DeformableDetrModelOutput(ModelOutput):
     encoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
     enc_outputs_class: Optional[torch.FloatTensor] = None
     enc_outputs_coord_logits: Optional[torch.FloatTensor] = None
+    enc_outputs_attr_logits: Optional[torch.FloatTensor] = None
     decoder_attention_queries: Optional[torch.FloatTensor] = None
     decoder_attention_keys: Optional[torch.FloatTensor] = None
 
@@ -1767,6 +1773,7 @@ class DeformableDetrDecoder(DeformableDetrPreTrainedModel):
 
         # hack implementation for iterative bounding box refinement and two-stage Deformable DETR
         self.bbox_embed = None
+        self.attr_embed = None
         self.class_embed = None
 
         # Initialize weights and apply final processing
@@ -2303,6 +2310,7 @@ class DeformableDetrModel(DeformableDetrPreTrainedModel):
         # Fifth, prepare decoder inputs
         batch_size, _, num_channels = encoder_outputs[0].shape
         enc_outputs_class = None
+        enc_outputs_attr_logits = None
         enc_outputs_coord_logits = None
         if self.config.two_stage:
             (
@@ -2316,6 +2324,9 @@ class DeformableDetrModel(DeformableDetrPreTrainedModel):
             # apply a detection head to each pixel (A.4 in paper)
             # linear projection for bounding box binary classification (i.e. foreground and background)
             enc_outputs_class = self.decoder.class_embed[-1](object_query_embedding)
+            # small FFN to predict other attributes (attribute regression)
+            if self.decoder.attr_embed is not None:
+                raise NotADirectoryError("Have not implemented attribute encoding for two stage")
             # 3-layer FFN to predict bounding boxes coordinates (bbox regression branch)
             delta_bbox = self.decoder.bbox_embed[-1](object_query_embedding)
             enc_outputs_coord_logits = delta_bbox + output_proposals
@@ -2329,13 +2340,14 @@ class DeformableDetrModel(DeformableDetrPreTrainedModel):
                 topk_proposals.unsqueeze(-1).repeat(1, 1, 4),
             )
 
+            # pass coordinates through sigmoid
             topk_coords_logits = topk_coords_logits.detach()
             reference_points = topk_coords_logits.sigmoid()
             init_reference_points = reference_points
             pos_trans_out = self.pos_trans_norm(
                 self.pos_trans(self.get_proposal_pos_embed(topk_coords_logits))
             )
-            query_embed, target = torch.split(pos_trans_out, num_channels, dim=2)
+            query_embed, target = torch.split(pos_trans_out, num_channels, dim=2)            
         else:
             query_embed, target = torch.split(query_embeds, num_channels, dim=1)
             query_embed = query_embed.unsqueeze(0).expand(batch_size, -1, -1)
@@ -2361,7 +2373,7 @@ class DeformableDetrModel(DeformableDetrPreTrainedModel):
         if not return_dict:
             enc_outputs = tuple(
                 value
-                for value in [enc_outputs_class, enc_outputs_coord_logits]
+                for value in [enc_outputs_class, enc_outputs_coord_logits, enc_outputs_attr_logits]
                 if value is not None
             )
             tuple_outputs = (
@@ -2388,6 +2400,7 @@ class DeformableDetrModel(DeformableDetrPreTrainedModel):
             encoder_attentions=encoder_outputs.attentions,
             enc_outputs_class=enc_outputs_class,
             enc_outputs_coord_logits=enc_outputs_coord_logits,
+            enc_outputs_attr_logits=enc_outputs_attr_logits,
         )
 
 
@@ -2413,19 +2426,38 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             output_dim=4,
             num_layers=3,
         )
+        if config.n_attributes > 0:
+            self.attribute_embed = DeformableDetrMLPPredictionHead(
+                input_dim=config.d_model,
+                hidden_dim=config.d_model,
+                output_dim=config.n_attributes,
+                num_layers=3,
+            )
+        else:
+            self.attribute_embed = None
 
+        # Initialize the detection heads
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
+        # -- classification
         self.class_embed.bias.data = torch.ones(config.num_labels) * bias_value
+        # -- bbox embedding
         nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
         nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
-
+        # -- attribute embedding
+        if self.attr_embed is not None:
+            nn.init.constant_(self.attr_embed.layers[-1].weight.data, 0)
+            nn.init.constant_(self.attr_embed.layers[-1].bias.data, 0)
+            
         # if two-stage, the last class_embed and bbox_embed is for region proposal generation
         num_pred = (
             (config.decoder_layers + 1) if config.two_stage else config.decoder_layers
         )
         if config.with_box_refine:
             self.class_embed = _get_clones(self.class_embed, num_pred)
+            if self.attr_embed is not None:
+                self.attr_embed = _get_clones(self.attr_embed, num_pred)
+                nn.init.constant_(self.attr_embed[0].layers[-1].bias.data[2:], -2.0)
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
             nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             # hack implementation for iterative bounding box refinement
@@ -2435,14 +2467,21 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             self.class_embed = nn.ModuleList(
                 [self.class_embed for _ in range(num_pred)]
             )
+            if self.attr_embed is not None:
+                self.attr_embed = nn.ModuleList(
+                    [self.attr_embed for _ in range(num_pred)]
+                )
             self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
             self.model.decoder.bbox_embed = None
         if config.two_stage:
             # hack implementation for two-stage
             self.model.decoder.class_embed = self.class_embed
+            if self.attr_embed is not None:
+                for attr_embed in self.attr_embed:
+                    nn.init.constant_(attr_embed.layers[-1].bias.data[2:], 0.0)
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
-
+            
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -2528,9 +2567,10 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             outputs.intermediate_reference_points if return_dict else outputs[3]
         )
 
-        # class logits + predicted bounding boxes
+        # class logits + predicted bounding boxes + predicted attributes
         outputs_classes = []
         outputs_coords = []
+        outputs_attrs = []
 
         for level in range(hidden_states.shape[1]):
             if level == 0:
@@ -2538,7 +2578,11 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             else:
                 reference = inter_references[:, level - 1]
             reference = inverse_sigmoid(reference)
+
+            # object class inference
             outputs_class = self.class_embed[level](hidden_states[:, level])
+
+            # box coordinate inference
             delta_bbox = self.bbox_embed[level](hidden_states[:, level])
             if reference.shape[-1] == 4:
                 outputs_coord_logits = delta_bbox + reference
@@ -2550,14 +2594,25 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
                     f"reference.shape[-1] should be 4 or 2, but got {reference.shape[-1]}"
                 )
             outputs_coord = outputs_coord_logits.sigmoid()
+
+            # append predictions
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
+
+            # attribute inference
+            if self.attr_embed is not None:
+                outputs_attr_logits = self.attr_embed[level](hidden_states[:, level])
+                outputs_attr  = outputs_attr_logits.sigmoid()
+                outputs_attrs.append(outputs_attr)
+
         # Keep batch_size as first dimension
         outputs_class = torch.stack(outputs_classes, dim=1)
         outputs_coord = torch.stack(outputs_coords, dim=1)
-
         logits = outputs_class[:, -1]
         pred_boxes = outputs_coord[:, -1]
+        if self.attr_embed is not None:
+            outputs_attr  = torch.stack(outputs_attrs, dim=1)
+            pred_attrs = outputs_attr[:, -1]
 
         loss, loss_dict, auxiliary_outputs = None, None, None
         if labels is not None:
