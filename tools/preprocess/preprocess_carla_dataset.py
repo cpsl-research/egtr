@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 
+import numpy as np
 from avapi.carla import CarlaScenesManager
 from tqdm import tqdm
 
@@ -27,6 +28,13 @@ def main(args):
         "truck": 4,
     }
     categories = [{"id": v, "name": k} for k, v in category_ids.items()]
+
+    # set up attribute scaling
+    attr_bounds = {
+        "volume": [0, 100],
+        "fraction_visible": [0, 1],
+        "orientation_3d": [-np.pi, np.pi],
+    }
 
     # loop over the splits
     idx_img = 0
@@ -100,6 +108,12 @@ def main(args):
                                 if fraction_visible is None:
                                     raise ValueError(fraction_visible)
 
+                                # pass targets through squeezing function with scaling functions
+                                def scale(value, bounds):
+                                    return (np.clip(value, *bounds) - bounds[0]) / (
+                                        bounds[1] - bounds[0]
+                                    )
+
                                 # store annotation details
                                 annotations.append(
                                     {
@@ -109,10 +123,21 @@ def main(args):
                                         "segmentation": [[]],  # TODO: segmentation mask
                                         "area": 1000,  # TODO: segmentation area
                                         "volume_3d": volume_3d,
-                                        "orientation_3d": orientation_3d,
                                         "fraction_visible": fraction_visible,
+                                        "orientation_3d": orientation_3d,
                                         "image_id": idx_img,
                                         "bbox": box_2d.box2d_xywh,
+                                        "attributes": [
+                                            scale(volume_3d, attr_bounds["volume"]),
+                                            scale(
+                                                fraction_visible,
+                                                attr_bounds["fraction_visible"],
+                                            ),
+                                            scale(
+                                                orientation_3d,
+                                                attr_bounds["orientation_3d"],
+                                            ),
+                                        ],
                                     }
                                 )
                                 idx_ann += 1
@@ -123,6 +148,7 @@ def main(args):
             "images": images,
             "annotations": annotations,
             "categories": categories,
+            "attr_bounds": attr_bounds,
         }
 
         # save the annotations for this split

@@ -27,12 +27,15 @@ class CarlaDetection(torchvision.datasets.CocoDetection):
         # preprocess image and target (converting target to DETR format, resizing + normalization of both image and target)
         image_id = self.ids[idx]
         target = {"image_id": image_id, "annotations": target, "file_name": None}
+        attrs = torch.Tensor([obj["attributes"] for obj in target["annotations"]])
         encoding = self.feature_extractor(
             images=img, annotations=target, return_tensors="pt"
         )
         pixel_values = encoding["pixel_values"].squeeze()  # remove batch dimension
         target = encoding["labels"][0]  # remove batch dimension
         target["class_labels"] -= 1  # remove 'no_relation' category
+        target["attrs"] = attrs
+
         return pixel_values, target
 
     def __len__(self):
