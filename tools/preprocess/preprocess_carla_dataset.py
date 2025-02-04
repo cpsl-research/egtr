@@ -31,10 +31,11 @@ def main(args):
 
     # set up attribute scaling
     attr_bounds = {
-        "volume": [0, 100],
+        "volume_3d": [0, 100],
         "fraction_visible": [0, 1],
         "orientation_3d": [-np.pi, np.pi],
     }
+    attributes = [{"name": k, "bound": v} for k, v in attr_bounds.items()]
 
     # loop over the splits
     idx_img = 0
@@ -127,8 +128,9 @@ def main(args):
                                         "orientation_3d": orientation_3d,
                                         "image_id": idx_img,
                                         "bbox": box_2d.box2d_xywh,
+                                        "bbox_xyxy": box_2d.box2d_xyxy,
                                         "attributes": [
-                                            scale(volume_3d, attr_bounds["volume"]),
+                                            scale(volume_3d, attr_bounds["volume_3d"]),
                                             scale(
                                                 fraction_visible,
                                                 attr_bounds["fraction_visible"],
@@ -148,7 +150,7 @@ def main(args):
             "images": images,
             "annotations": annotations,
             "categories": categories,
-            "attr_bounds": attr_bounds,
+            "attributes": attributes,
         }
 
         # save the annotations for this split

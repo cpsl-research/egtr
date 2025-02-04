@@ -311,7 +311,7 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
         topk_values, topk_indexes = torch.topk(
             prob.view(out_logits.shape[0], -1), 100, dim=1
         )
-        scores = topk_values
+        scores = topk_valuest
         topk_boxes = torch.div(topk_indexes, out_logits.shape[2], rounding_mode="trunc")
 
         # box predictions
@@ -325,14 +325,12 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
         boxes = boxes * scale_fct[:, None, :]
 
         # get attribute prediction with scaling
-        breakpoint()
         attrs = torch.gather(
-            out_attr, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, 4)
-        )  # TODO: the 4 may be only for bboxes...
-        attr_bias_fct = torch.stack([b[0] for b in attr_bounds], dim=1)
-        attr_scale_fct = torch.stack([b[1] - b[0] for b in attr_bounds], dim=1)
-        attrs = attrs * attr_scale_fct[:, None, :] + attr_bias_fct[:, None, :]
-        raise NotImplementedError
+            out_attr, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, out_attr.shape[2])
+        )
+        attr_bias_fct = attr_bounds[:, 0]
+        attr_scale_fct = attr_bounds[:, 1] - attr_bounds[:, 0]
+        attrs = attrs * attr_scale_fct[None, None, :] + attr_bias_fct[None, None, :]
 
         # package the results
         results = [
@@ -2872,17 +2870,14 @@ class DeformableDetrLoss(nn.Module):
         )
 
         if use_l1:
-            loss_attr = nn.functional.l1_loss(
-                source_attrs, target_attrs, reduction="none"
-            )
+            loss_attr = nn.functional.l1_loss(source_attrs, target_attrs)
         else:
-            loss_attr = nn.functional.mse_loss(
-                source_attrs, target_attrs, reduction="none"
-            )
+            loss_attr = nn.functional.mse_loss(source_attrs, target_attrs)
 
         num_attrs = source_attrs.shape[1]
         losses = {}
-        losses["loss_attr"] = loss_attr.sum() / (num_boxes * num_attrs)
+        # losses["loss_attr"] = loss_attr.sum() / (num_boxes * num_attrs)
+        losses["loss_attr"] = loss_attr
         return losses
 
     def _get_source_permutation_idx(self, indices):

@@ -20,6 +20,10 @@ class CarlaDetection(torchvision.datasets.CocoDetection):
         img, _ = super(CarlaDetection, self).__getitem__(idx)
         return img
 
+    def get_target(self, idx):
+        _, target = super(CarlaDetection, self).__getitem__(idx)
+        return target
+
     def __getitem__(self, idx):
         # read in PIL image and target in COCO format
         img, target = super(CarlaDetection, self).__getitem__(idx)

@@ -22,5 +22,5 @@ python pretrain_detr.py \
     --skip_train false \
     --finetune true \
     --load_initial_ckpt false \
-    --initial_ckpt_dir $PRETRAIN_DIRPATH \
-    --resume true
+    --resume false
+    # --initial_ckpt_dir $PRETRAIN_DIRPATH \
