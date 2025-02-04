@@ -54,9 +54,10 @@ class CarlaDataset(CarlaDetection):
         self, data_folder, feature_extractor, split, num_object_queries=100, debug=False
     ):
         super(CarlaDataset, self).__init__(data_folder, feature_extractor, split, debug)
-        with open(f"{data_folder}/rel.json", "r") as f:
+        rel_file = os.path.join(data_folder, "annotations", f"{split}_rel.json")
+        with open(rel_file, "r") as f:
             rel = json.load(f)
-        self.rel = rel[split]
+        self.rel = rel["relations"]
         self.rel_categories = rel["rel_categories"][1:]  # remove 'no_relation' category
         self.num_object_queries = num_object_queries
 

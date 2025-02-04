@@ -311,7 +311,7 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
         topk_values, topk_indexes = torch.topk(
             prob.view(out_logits.shape[0], -1), 100, dim=1
         )
-        scores = topk_valuest
+        scores = topk_values
         topk_boxes = torch.div(topk_indexes, out_logits.shape[2], rounding_mode="trunc")
 
         # box predictions
@@ -2477,8 +2477,8 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
         )
         if config.with_box_refine:
             self.class_embed = _get_clones(self.class_embed, num_pred)
-            self.attr_embed = _get_clones(self.attr_embed, num_pred)
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
+            self.attr_embed = _get_clones(self.attr_embed, num_pred)
             nn.init.constant_(self.attr_embed[0].layers[-1].bias.data[2:], -2.0)
             nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             # hack implementation for iterative bounding box refinement
@@ -2488,16 +2488,16 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             self.class_embed = nn.ModuleList(
                 [self.class_embed for _ in range(num_pred)]
             )
-            self.attr_embed = nn.ModuleList([self.attr_embed for _ in range(num_pred)])
             self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
+            self.attr_embed = nn.ModuleList([self.attr_embed for _ in range(num_pred)])
             self.model.decoder.bbox_embed = None
         if config.two_stage:
             # hack implementation for two-stage
             self.model.decoder.class_embed = self.class_embed
-            for attr_embed in self.attr_embed:
-                nn.init.constant_(attr_embed.layers[-1].bias.data[2:], 0.0)
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
+            for attr_embed in self.attr_embed:
+                nn.init.constant_(attr_embed.layers[-1].bias.data[2:], 0.0)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -2672,6 +2672,7 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
                 }
 
             loss_dict = criterion(outputs_loss, labels)
+
             # Fourth: compute total loss, as a weighted sum of the various losses
             weight_dict = {
                 "loss_ce": self.config.ce_loss_coefficient,
@@ -2725,6 +2726,7 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             intermediate_reference_points=outputs.intermediate_reference_points,
             enc_outputs_class=outputs.enc_outputs_class,
             enc_outputs_coord_logits=outputs.enc_outputs_coord_logits,
+            enc_outputs_attr_logits=outputs.enc_outputs_attr_logits,
         )
 
         return dict_outputs

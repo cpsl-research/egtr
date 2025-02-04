@@ -21,7 +21,7 @@ from egtr.deformable_detr import (
     DeformableDetrFeatureExtractor,
     DeformableDetrFeatureExtractorWithAugmentor,
 )
-from egtr.tools import collate_fn
+from egtr.tools import collate_fn, get_checkpoint, str2bool
 from lib.evaluation.coco_eval import CocoEvaluator
 from lib.evaluation.oi_eval import OICocoEvaluator
 from util.misc import use_deterministic_algorithms
@@ -133,23 +133,7 @@ def main(args):
     logger = TensorBoardLogger(save_dir, name=name, version=version)
 
     # load a set checkpoint, if available and NOT resume
-    if (not args.resume) and args.initial_ckpt_dir:
-        ckpt_dir = f"{args.initial_ckpt_dir}/checkpoints"
-        if not os.path.exists(ckpt_dir):
-            raise FileNotFoundError(ckpt_dir)
-        else:
-            ckpt_path = get_last_ckpt(ckpt_dir)
-        if "visual_genome" in args.initial_ckpt_dir:
-            num_labels_temp = 150
-        else:
-            raise NotImplementedError(args.initial_ckpt_dir)
-    else:
-        ckpt_dir = f"{logger.log_dir}/checkpoints"
-        if os.path.exists(ckpt_dir):
-            ckpt_path = get_last_ckpt(ckpt_dir)
-        else:
-            ckpt_path = None
-        num_labels_temp = None
+    ckpt_path = get_checkpoint(args.resume, args.initial_ckpt_dir, logger.log_dir)
 
     # Module
     module = Detr(
@@ -340,28 +324,6 @@ def main(args):
         if trainer.is_global_zero:
             print("### Evaluation")
         trainer.test(module, dataloaders=test_dataloader)
-
-
-def get_last_ckpt(ckpt_dir):
-    if os.path.exists(f"{ckpt_dir}/last.ckpt"):
-        ckpt_path = f"{ckpt_dir}/last.ckpt"
-    else:
-        ckpt_path = sorted(
-            glob(f"{ckpt_dir}/epoch=*.ckpt"),
-            key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
-        )[-1]
-    return ckpt_path
-
-
-def str2bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ("yes", "true", "t", "y", "1"):
-        return True
-    elif v.lower() in ("no", "false", "f", "n", "0"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Boolean value expected.")
 
 
 if __name__ == "__main__":

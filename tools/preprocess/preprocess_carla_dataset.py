@@ -31,11 +31,16 @@ def main(args):
 
     # set up attribute scaling
     attr_bounds = {
+        "range_obj": [0, 100],
         "volume_3d": [0, 100],
         "fraction_visible": [0, 1],
         "orientation_3d": [-np.pi, np.pi],
     }
     attributes = [{"name": k, "bound": v} for k, v in attr_bounds.items()]
+
+    # set up relationships
+    rel_categories = {}
+    relations = {}
 
     # loop over the splits
     idx_img = 0
@@ -98,11 +103,12 @@ def main(args):
 
                             # add annotation information
                             for obj in objs:
-                                # pull off boes
+                                # pull off boxes
                                 box_3d = obj.box
                                 box_2d = box_3d.project_to_2d_bbox(calib=calib)
 
                                 # compute additional attributes
+                                range_obj = obj.box.position.norm()
                                 volume_3d = box_3d.volume
                                 orientation_3d = box_3d.yaw
                                 fraction_visible = obj.visible_fraction
@@ -123,6 +129,7 @@ def main(args):
                                         "iscrowd": 0,
                                         "segmentation": [[]],  # TODO: segmentation mask
                                         "area": 1000,  # TODO: segmentation area
+                                        "range": range_obj,
                                         "volume_3d": volume_3d,
                                         "fraction_visible": fraction_visible,
                                         "orientation_3d": orientation_3d,
@@ -130,6 +137,7 @@ def main(args):
                                         "bbox": box_2d.box2d_xywh,
                                         "bbox_xyxy": box_2d.box2d_xyxy,
                                         "attributes": [
+                                            scale(range_obj, attr_bounds["range_obj"]),
                                             scale(volume_3d, attr_bounds["volume_3d"]),
                                             scale(
                                                 fraction_visible,
@@ -142,6 +150,10 @@ def main(args):
                                         ],
                                     }
                                 )
+
+                                # store relation details
+                                relations[idx_img] = []
+
                                 idx_ann += 1
                             idx_img += 1
 
@@ -153,11 +165,23 @@ def main(args):
             "attributes": attributes,
         }
 
+        # package up the relations
+        relation_data = {
+            "relations": relations,
+            "rel_categories": rel_categories,
+        }
+
         # save the annotations for this split
         ann_file = os.path.join(ann_dir, f"{split}.json")
         with open(ann_file, "w") as f:
             json.dump(annotation_data, f)
         print(f"Saved {ann_file} file")
+
+        # save the relations for this split
+        rel_file = os.path.join(ann_dir, f"{split}_rel.json")
+        with open(rel_file, "w") as f:
+            json.dump(relation_data, f)
+        print(f"Saved {rel_file} file")
 
 
 if __name__ == "__main__":

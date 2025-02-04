@@ -103,6 +103,7 @@ class DetrSceneGraphGenerationOutput(ModelOutput):
     loss_dict: Optional[Dict] = None
     logits: Optional[torch.FloatTensor] = None
     pred_boxes: Optional[torch.FloatTensor] = None
+    pred_attrs: Optional[torch.FloatTensor] = None
     pred_rel: Optional[torch.FloatTensor] = None
     pred_connectivity: Optional[torch.FloatTensor] = None
     auxiliary_outputs: Optional[List[Dict]] = None
@@ -132,12 +133,24 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
             output_dim=4,
             num_layers=3,
         )
+        self.attr_embed = DeformableDetrMLPPredictionHead(
+            input_dim=config.d_model,
+            hidden_dim=config.d_model,
+            output_dim=config.n_attributes,
+            num_layers=3,
+        )
 
+        # Initialize the detection heads
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
+        # -- classification
         self.class_embed.bias.data = torch.ones(config.num_labels) * bias_value
+        # -- bbox embedding
         nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
         nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
+        # -- attribute embedding
+        nn.init.constant_(self.attr_embed.layers[-1].weight.data, 0)
+        nn.init.constant_(self.attr_embed.layers[-1].bias.data, 0)
 
         # if two-stage, the last class_embed and bbox_embed is for region proposal generation
         num_pred = (
@@ -146,6 +159,8 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
         if config.with_box_refine:
             self.class_embed = _get_clones(self.class_embed, num_pred)
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
+            self.attr_embed = _get_clones(self.attr_embed, num_pred)
+            nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             # hack implementation for iterative bounding box refinement
             self.model.decoder.bbox_embed = self.bbox_embed
@@ -155,12 +170,15 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
                 [self.class_embed for _ in range(num_pred)]
             )
             self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
+            self.attr_embed = nn.ModuleList([self.attr_embed for _ in range(num_pred)])
             self.model.decoder.bbox_embed = None
         if config.two_stage:
             # hack implementation for two-stage
             self.model.decoder.class_embed = self.class_embed
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
+            for attr_embed in self.attr_embed:
+                nn.init.constant_(attr_embed.layers[-1].bias.data[2:], 0.0)
 
         self.num_queries = self.config.num_queries
         self.head_dim = config.d_model // config.num_attention_heads
@@ -282,6 +300,7 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
         # class logits + predicted bounding boxes
         outputs_classes = []
         outputs_coords = []
+        outputs_attrs = []
 
         for level in range(hidden_states.shape[1]):
             if level == 0:
@@ -289,7 +308,11 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
             else:
                 reference = inter_references[:, level - 1]
             reference = inverse_sigmoid(reference)
+
+            # object class inference
             outputs_class = self.class_embed[level](hidden_states[:, level])
+
+            # box coordinate inference
             delta_bbox = self.bbox_embed[level](hidden_states[:, level])
             if reference.shape[-1] == 4:
                 outputs_coord_logits = delta_bbox + reference
@@ -301,23 +324,34 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
                     f"reference.shape[-1] should be 4 or 2, but got {reference.shape[-1]}"
                 )
             outputs_coord = outputs_coord_logits.sigmoid()
+
+            # attribute inference
+            outputs_attr_logits = self.attr_embed[level](hidden_states[:, level])
+            outputs_attr = outputs_attr_logits.sigmoid()
+
+            # append predictions
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
+            outputs_attrs.append(outputs_attr)
 
         del hidden_states, init_reference, inter_references
         # Keep batch_size as first dimension
         outputs_class = torch.stack(outputs_classes, dim=1)
         outputs_coord = torch.stack(outputs_coords, dim=1)
-        del outputs_classes, outputs_coords
+        outputs_attr = torch.stack(outputs_attrs, dim=1)
+        del outputs_classes, outputs_coords, outputs_attr
 
         logits = outputs_class[:, -1]
         pred_boxes = outputs_coord[:, -1]
+        pred_attrs = outputs_attr[:, -1]
 
         if self.config.auxiliary_loss:
             outputs_class = outputs_class[:, : self.config.decoder_layers, ...]
             outputs_coord = outputs_coord[:, : self.config.decoder_layers, ...]
+            outputs_attr = outputs_attr[:, : self.config.decoder_layers, ...]
             outputs_class = outputs_class.permute(1, 0, 2, 3)
             outputs_coord = outputs_coord.permute(1, 0, 2, 3)
+            outputs_attr = outputs_attr.permute(1, 0, 2, 3)
 
         _, num_object_queries, _ = logits.shape
         unscaling = self.head_dim**0.5
@@ -427,11 +461,19 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
                 smoothing=self.config.smoothing,
             )  # the same as loss coefficients
             # Second: create the criterion
-            losses = ["labels", "boxes", "relations", "cardinality", "uncertainty"]
+            losses = [
+                "labels",
+                "boxes",
+                "relations",
+                "cardinality",
+                "attributes",
+                "uncertainty",
+            ]
             criterion = SceneGraphGenerationLoss(
                 matcher=matcher,
                 num_object_queries=num_object_queries,
                 num_classes=self.config.num_labels,
+                num_attrs=self.config.num_attrs,
                 num_rel_labels=self.config.num_rel_labels,
                 eos_coef=self.config.eos_coefficient,
                 losses=losses,
@@ -450,18 +492,23 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
             outputs_loss = {}
             outputs_loss["logits"] = logits
             outputs_loss["pred_boxes"] = pred_boxes
+            outputs_loss["pred_attrs"] = pred_attrs
             outputs_loss["pred_rel"] = pred_rel
             outputs_loss["pred_connectivity"] = pred_connectivity
 
             if self.config.auxiliary_loss:
-                auxiliary_outputs = self._set_aux_loss(outputs_class, outputs_coord)
+                auxiliary_outputs = self._set_aux_loss(
+                    outputs_class, outputs_coord, outputs_attr
+                )
                 outputs_loss["auxiliary_outputs"] = auxiliary_outputs
 
             if self.config.two_stage:
                 enc_outputs_coord = outputs.enc_outputs_coord_logits.sigmoid()
+                enc_outputs_attr = outputs.enc_outputs_attr_logits.sigmoid()
                 outputs_loss["enc_outputs"] = {
                     "logits": outputs.enc_outputs_class,
                     "pred_boxes": enc_outputs_coord,
+                    "pred_attrs": enc_outputs_attr,
                 }
 
             loss_dict = criterion(outputs_loss, labels)
@@ -470,6 +517,7 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
             weight_dict = {
                 "loss_ce": self.config.ce_loss_coefficient,
                 "loss_bbox": self.config.bbox_loss_coefficient,
+                "loss_attr": self.config.attr_loss_coefficient,
             }
             weight_dict["loss_giou"] = self.config.giou_loss_coefficient
             weight_dict["loss_rel"] = self.config.rel_loss_coefficient
@@ -517,9 +565,9 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
 
         if not return_dict:
             if auxiliary_outputs is not None:
-                output = (logits, pred_boxes) + auxiliary_outputs + outputs
+                output = (logits, pred_boxes, pred_attrs) + auxiliary_outputs + outputs
             else:
-                output = (logits, pred_boxes) + outputs
+                output = (logits, pred_boxes, pred_attrs) + outputs
             return ((loss, loss_dict) + output) if loss is not None else output
 
         return DetrSceneGraphGenerationOutput(
@@ -527,6 +575,7 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
             loss_dict=loss_dict,
             logits=logits,
             pred_boxes=pred_boxes,
+            pred_attrs=pred_attrs,
             pred_rel=pred_rel,
             pred_connectivity=pred_connectivity,
             auxiliary_outputs=auxiliary_outputs,
@@ -553,6 +602,7 @@ class SceneGraphGenerationLoss(nn.Module):
         matcher,
         num_object_queries,
         num_classes,
+        num_attrs,
         num_rel_labels,
         eos_coef,
         losses,
@@ -584,6 +634,7 @@ class SceneGraphGenerationLoss(nn.Module):
         super().__init__()
         self.num_object_queries = num_object_queries
         self.num_classes = num_classes
+        self.num_attrs = num_attrs
         self.num_rel_labels = num_rel_labels
         self.matcher = matcher
         self.eos_coef = eos_coef
@@ -714,6 +765,33 @@ class SceneGraphGenerationLoss(nn.Module):
             )
         )
         losses["loss_giou"] = loss_giou.sum() / num_boxes
+        return losses
+
+    def loss_attributes(
+        self, outputs, targets, indices, matching_costs, num_boxes, use_l1=False
+    ):
+        """
+        Compute the loss related to the attributes, using L1 or L2 regression
+        Targets dict must contain the key "attrs" containing a tensor of dim [num_boxes, num_attrs].
+        The attributes are expected as between [-1.0, 1.0] by a sigmoid function.
+        TODO: each attribute could have custom loss function (e.g., for angles)
+        """
+
+        idx = self._get_src_permutation_idx(indices)
+        source_attrs = outputs["pred_attrs"][idx]
+        target_attrs = torch.cat(
+            [t["attrs"][i] for t, (_, i) in zip(targets, indices)], dim=0
+        )
+
+        if use_l1:
+            loss_attr = nn.functional.l1_loss(source_attrs, target_attrs)
+        else:
+            loss_attr = nn.functional.mse_loss(source_attrs, target_attrs)
+
+        num_attrs = source_attrs.shape[1]
+        losses = {}
+        # losses["loss_attr"] = loss_attr.sum() / (num_boxes * num_attrs)
+        losses["loss_attr"] = loss_attr
         return losses
 
     def loss_masks(self, outputs, targets, indices, matching_costs, num_boxes):
@@ -943,6 +1021,7 @@ class SceneGraphGenerationLoss(nn.Module):
             "labels": self.loss_labels,
             "cardinality": self.loss_cardinality,
             "boxes": self.loss_boxes,
+            "attributes": self.loss_attributes,
             "masks": self.loss_masks,
             "relations": self.loss_relations,
             "uncertainty": self.loss_uncertainty,
