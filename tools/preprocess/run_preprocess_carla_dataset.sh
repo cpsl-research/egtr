@@ -12,4 +12,5 @@ STRIDE=${3:-4}
 python preprocess_carla_dataset.py \
     --input_dir $INPUT_DIR \
     --output_dir $OUTPUT_DIR \
+    --with_relations \
     --stride $STRIDE

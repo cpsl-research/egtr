@@ -205,7 +205,7 @@ class DeformableDetrConfig(PretrainedConfig):
         two_stage=False,
         two_stage_num_proposals=300,
         with_box_refine=False,
-        n_attributes=3,
+        n_attributes=4,
         class_cost=1,
         bbox_cost=5,
         giou_cost=2,

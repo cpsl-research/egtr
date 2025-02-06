@@ -421,6 +421,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--backbone_dirpath", type=str, default=""
     )  # required when from_scratch is True
+    parser.add_argument("--initial_ckpt_dir", type=str, required=False)
 
     # Architecture
     parser.add_argument("--architecture", type=str, default="SenseTime/deformable-detr")

@@ -54,11 +54,12 @@ class CarlaDataset(CarlaDetection):
         self, data_folder, feature_extractor, split, num_object_queries=100, debug=False
     ):
         super(CarlaDataset, self).__init__(data_folder, feature_extractor, split, debug)
-        rel_file = os.path.join(data_folder, "annotations", f"{split}_rel.json")
+        rel_file = os.path.join(data_folder, "relations", f"{split}_rel.json")
         with open(rel_file, "r") as f:
             rel = json.load(f)
         self.rel = rel["relations"]
         self.rel_categories = rel["rel_categories"][1:]  # remove 'no_relation' category
+        self.num_relations = len(self.rel_categories)
         self.num_object_queries = num_object_queries
 
     def __getitem__(self, idx):
@@ -68,6 +69,7 @@ class CarlaDataset(CarlaDetection):
         # preprocess image and target (converting target to DETR format, resizing + normalization of both image and target)
         image_id = self.ids[idx]
         target = {"image_id": image_id, "annotations": target, "file_name": None}
+        attrs = torch.Tensor([obj["attributes"] for obj in target["annotations"]])
         rel_list = self.rel[str(image_id)]
         encoding = self.feature_extractor(
             images=img, annotations=target, return_tensors="pt"
@@ -77,14 +79,18 @@ class CarlaDataset(CarlaDetection):
         rel = np.array(rel_list)
         target["rel"] = self._get_rel_tensor(rel)
         target["class_labels"] -= 1
+        target["attrs"] = attrs
+
         return pixel_values, target
 
     def _get_rel_tensor(self, rel_tensor):
+        rel = torch.zeros(
+            [self.num_object_queries, self.num_object_queries, self.num_relations]
+        )
         indices = rel_tensor.T
-        indices[-1, :] -= 1  # remove 'no_relation' category
-
-        rel = torch.zeros([self.num_object_queries, self.num_object_queries, 50])
-        rel[indices[0, :], indices[1, :], indices[2, :]] = 1.0
+        if len(indices) > 0:
+            indices[-1, :] -= 1  # remove 'no_relation' category
+            rel[indices[0, :], indices[1, :], indices[2, :]] = 1.0
         return rel
 
 
@@ -115,6 +121,8 @@ def carla_get_statistics(train_data, must_overlap=True):
         target = train_data.coco.loadAnns(train_data.coco.getAnnIds(image_id))
         gt_classes = np.array(list(map(lambda x: x["category_id"], target)))
         rel_list = rel[str(image_id)]
+        if len(rel_list) == 0:
+            continue
         gt_indices = np.array(torch.Tensor(rel_list).T, dtype="int64")
         gt_indices[-1, :] -= 1
 

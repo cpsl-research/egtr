@@ -18,7 +18,9 @@ python train_egtr.py \
     --memo $MEMO \
     --from_scratch true \
     --pretrained architecture \
-    --gpus $GPUS \
+    --gpus 2 \
     --skip_train false \
     --finetune true \
     --resume true
+
+        # --gpus $GPUS \

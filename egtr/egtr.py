@@ -339,7 +339,7 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
         outputs_class = torch.stack(outputs_classes, dim=1)
         outputs_coord = torch.stack(outputs_coords, dim=1)
         outputs_attr = torch.stack(outputs_attrs, dim=1)
-        del outputs_classes, outputs_coords, outputs_attr
+        del outputs_classes, outputs_coords, outputs_attrs
 
         logits = outputs_class[:, -1]
         pred_boxes = outputs_coord[:, -1]
@@ -473,7 +473,6 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
                 matcher=matcher,
                 num_object_queries=num_object_queries,
                 num_classes=self.config.num_labels,
-                num_attrs=self.config.num_attrs,
                 num_rel_labels=self.config.num_rel_labels,
                 eos_coef=self.config.eos_coefficient,
                 losses=losses,
@@ -602,7 +601,6 @@ class SceneGraphGenerationLoss(nn.Module):
         matcher,
         num_object_queries,
         num_classes,
-        num_attrs,
         num_rel_labels,
         eos_coef,
         losses,
@@ -634,7 +632,6 @@ class SceneGraphGenerationLoss(nn.Module):
         super().__init__()
         self.num_object_queries = num_object_queries
         self.num_classes = num_classes
-        self.num_attrs = num_attrs
         self.num_rel_labels = num_rel_labels
         self.matcher = matcher
         self.eos_coef = eos_coef

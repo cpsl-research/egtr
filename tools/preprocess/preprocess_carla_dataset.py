@@ -5,7 +5,10 @@ import shutil
 
 import numpy as np
 from avapi.carla import CarlaScenesManager
+from avstack.geometry import ReferenceFrame, q_cam_to_stan
 from tqdm import tqdm
+
+from egtr.relations import REL_REVINDEX, REL_STRINGS, RELATIONS
 
 
 def main(args):
@@ -18,6 +21,9 @@ def main(args):
     ann_dir = os.path.join(args.output_dir, "annotations")
     os.makedirs(img_dir)
     os.makedirs(ann_dir)
+    if args.with_relations:
+        rel_dir = os.path.join(args.output_dir, "relations")
+        os.makedirs(rel_dir)
 
     # set up categories
     category_ids = {
@@ -39,7 +45,6 @@ def main(args):
     attributes = [{"name": k, "bound": v} for k, v in attr_bounds.items()]
 
     # set up relationships
-    rel_categories = {}
     relations = {}
 
     # loop over the splits
@@ -150,11 +155,35 @@ def main(args):
                                         ],
                                     }
                                 )
-
-                                # store relation details
-                                relations[idx_img] = []
-
                                 idx_ann += 1
+
+                            # convert reference frame of objects for evaluation
+                            reference_objs = ReferenceFrame(
+                                x=calib.reference.x,
+                                q=q_cam_to_stan * calib.reference.q,
+                                reference=calib.reference.reference,
+                            )
+                            objs_for_rel = objs.apply_and_return(
+                                "change_reference",
+                                reference_objs,
+                                inplace=False,
+                            )
+
+                            # add relation information
+                            if args.with_relations:
+                                relations[idx_img] = []
+                                for i, obj1 in enumerate(objs_for_rel):
+                                    for j, obj2 in enumerate(objs_for_rel):
+                                        if i != j:
+                                            for REL in RELATIONS:
+                                                if REL(obj1, obj2):
+                                                    # add to relation list (subject, object, predicate)
+                                                    # TODO: what are the subject/object indices?
+                                                    relations[idx_img].append(
+                                                        (i, j, REL_REVINDEX[REL.name])
+                                                    )
+
+                            # increment and move on
                             idx_img += 1
 
         # package up the annotations
@@ -168,7 +197,7 @@ def main(args):
         # package up the relations
         relation_data = {
             "relations": relations,
-            "rel_categories": rel_categories,
+            "rel_categories": REL_STRINGS,
         }
 
         # save the annotations for this split
@@ -178,10 +207,11 @@ def main(args):
         print(f"Saved {ann_file} file")
 
         # save the relations for this split
-        rel_file = os.path.join(ann_dir, f"{split}_rel.json")
-        with open(rel_file, "w") as f:
-            json.dump(relation_data, f)
-        print(f"Saved {rel_file} file")
+        if args.with_relations:
+            rel_file = os.path.join(rel_dir, f"{split}_rel.json")
+            with open(rel_file, "w") as f:
+                json.dump(relation_data, f)
+            print(f"Saved {rel_file} file")
 
 
 if __name__ == "__main__":
@@ -191,6 +221,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--output_dir", default="/data/shared/CARLA/scenes-for-egtr/processed", type=str
+    )
+    parser.add_argument(
+        "--with_relations",
+        action="store_true",
     )
     parser.add_argument("--stride", default=4, type=int)
     args = parser.parse_args()

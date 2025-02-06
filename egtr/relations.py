@@ -17,11 +17,14 @@ def heading_difference(obj1, obj2):
 
 
 def validate_relation_list(relations: List[Tuple]) -> bool:
-    """Some relations must have counterparts present"""
+    """Some relations must have counterparts present
+
+    Relations in the form of (subject, object, predicate)
+    """
     for relation in relations:
-        cp = REL_DICT[relation[1]].counterpart
+        cp = REL_DICT[relation[2]].counterpart
         if cp is not None:
-            relation_cp = (relation[2], cp.name, relation[0])
+            relation_cp = (relation[1], relation[0], cp.name)
             if relation_cp not in relations:
                 raise RuntimeError(
                     f"Relation {relation} present and expected to "
@@ -290,7 +293,22 @@ class OccludedBy(RelationOperator):
         return Occluding._evaluate(obj2, obj1, *args, **kwargs)
 
 
+class NoRelation(RelationOperator):
+    """No relation between obj1 and obj2"""
+
+    name = "__background__"  # this is what EGTR called it...
+
+    @property
+    def counterpart(self) -> RelationOperator:
+        return NoRelation
+
+    @staticmethod
+    def _evaluate(obj1: "ObjectState", obj2: "ObjectState", *args, **kwargs) -> bool:
+        return False  # not sure if there is ever no relation...
+
+
 RELATIONS = [
+    NoRelation(),
     Following(),
     FollowedBy(),
     SideBy(),
@@ -302,6 +320,8 @@ RELATIONS = [
     OccludedBy(),
 ]
 
+
+REL_STRINGS = [REL.name for REL in RELATIONS]
 REL_DICT = {REL.name: REL for REL in RELATIONS}
 REL_INDEX = {i: REL.name for i, REL in enumerate(RELATIONS)}
 REL_REVINDEX = {REL.name: i for i, REL in enumerate(RELATIONS)}

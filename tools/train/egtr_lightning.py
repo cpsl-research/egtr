@@ -115,8 +115,8 @@ class SGG(pl.LightningModule):
         self.coco_evaluator = coco_evaluator
         self.oi_evaluator = oi_evaluator
         self.feature_extractor = feature_extractor
-        self.train_dataloader = train_dataloader
-        self.val_dataloader = val_dataloader
+        self._train_dataloader = train_dataloader
+        self._val_dataloader = val_dataloader
 
     def forward(self, pixel_values, pixel_mask):
         outputs = self.model(
@@ -293,6 +293,12 @@ class SGG(pl.LightningModule):
             param_dicts, lr=self.lr, weight_decay=self.weight_decay
         )
         return optimizer
+
+    def train_dataloader(self):
+        return self._train_dataloader
+
+    def val_dataloader(self):
+        return self._val_dataloader
 
 
 # Reference: https://github.com/yuweihao/KERN/blob/master/models/eval_rels.py
