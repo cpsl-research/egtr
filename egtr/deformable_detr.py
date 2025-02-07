@@ -275,8 +275,12 @@ class DeformableDetrConfig(PretrainedConfig):
 
 class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
     # only different post_process
+
+    def __call__(self, images, **kwargs):
+        return super().__call__(images, **kwargs)
+
     # https://github.com/huggingface/transformers/pull/19140/files#diff-1a733eaefea2a0e31453af1f2df3808bddd73900d61ec714d11dc25547ed0194
-    def post_process(self, outputs, target_sizes, attr_bounds):
+    def post_process(self, outputs, target_sizes):
         """
         Converts the output of [`DeformableDetrForObjectDetection`] into the format expected by the COCO api. Only
         supports PyTorch.
@@ -328,9 +332,6 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
         attrs = torch.gather(
             out_attr, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, out_attr.shape[2])
         )
-        attr_bias_fct = attr_bounds[:, 0]
-        attr_scale_fct = attr_bounds[:, 1] - attr_bounds[:, 0]
-        attrs = attrs * attr_scale_fct[None, None, :] + attr_bias_fct[None, None, :]
 
         # package the results
         results = [

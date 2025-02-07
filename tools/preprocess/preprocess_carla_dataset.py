@@ -27,11 +27,11 @@ def main(args):
 
     # set up categories
     category_ids = {
-        "person": 0,
-        "car": 1,
-        "motorcycle": 2,
-        "bicycle": 3,
-        "truck": 4,
+        "person": 1,
+        "car": 2,
+        "motorcycle": 3,
+        "bicycle": 4,
+        "truck": 5,
     }
     categories = [{"id": v, "name": k} for k, v in category_ids.items()]
 
@@ -170,17 +170,23 @@ def main(args):
                             )
 
                             # add relation information
+                            # if idx_img == 1216:
+                            #     breakpoint()
                             if args.with_relations:
                                 relations[idx_img] = []
-                                for i, obj1 in enumerate(objs_for_rel):
-                                    for j, obj2 in enumerate(objs_for_rel):
-                                        if i != j:
+                                for idx_o1, obj1 in enumerate(objs_for_rel):
+                                    for idx_o2, obj2 in enumerate(objs_for_rel):
+                                        if idx_o1 != idx_o2:
                                             for REL in RELATIONS:
                                                 if REL(obj1, obj2):
                                                     # add to relation list (subject, object, predicate)
                                                     # TODO: what are the subject/object indices?
                                                     relations[idx_img].append(
-                                                        (i, j, REL_REVINDEX[REL.name])
+                                                        (
+                                                            idx_o1,
+                                                            idx_o2,
+                                                            REL_REVINDEX[REL.name],
+                                                        )
                                                     )
 
                             # increment and move on

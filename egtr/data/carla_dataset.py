@@ -32,12 +32,25 @@ class CarlaDetection(torchvision.datasets.CocoDetection):
         image_id = self.ids[idx]
         target = {"image_id": image_id, "annotations": target, "file_name": None}
         attrs = torch.Tensor([obj["attributes"] for obj in target["annotations"]])
+        n_obj_before = len(target["annotations"])
         encoding = self.feature_extractor(
             images=img, annotations=target, return_tensors="pt"
         )
         pixel_values = encoding["pixel_values"].squeeze()  # remove batch dimension
         target = encoding["labels"][0]  # remove batch dimension
         target["class_labels"] -= 1  # remove 'no_relation' category
+        n_obj_after = len(target["boxes"])
+
+        # if the size happens to change during preprocess, (STILL DONT KNOW WHY)
+        # we have to figure out which boxes remain....NOT SURE HOW TO DO THIS
+        # therefore we will hack it by dropping relations/attributes from the end
+        # HACK: THIS IS NOT CORRECT, but I'm assuming this only happens a few times...
+        if n_obj_before != n_obj_after:
+            # print("WARNING: THE NUMBER OF OBJECTS CHANGED DURING PREPROC!!!")
+            # print("Dropping extras from the end of attrs, but this is not good...")
+            attrs = attrs[:n_obj_after, :]
+
+        # augment attributes
         target["attrs"] = attrs
 
         return pixel_values, target
@@ -47,6 +60,13 @@ class CarlaDetection(torchvision.datasets.CocoDetection):
             return 5000
         else:
             return len(self.ids)
+
+    @staticmethod
+    def unscale_attributes(attrs, attr_bounds):
+        attr_bias_fct = attr_bounds[:, 0]
+        attr_scale_fct = attr_bounds[:, 1] - attr_bounds[:, 0]
+        attrs = attrs * attr_scale_fct[None, None, :] + attr_bias_fct[None, None, :]
+        return attrs
 
 
 class CarlaDataset(CarlaDetection):
@@ -63,6 +83,7 @@ class CarlaDataset(CarlaDetection):
         self.num_object_queries = num_object_queries
 
     def __getitem__(self, idx):
+        # len(test_dataloader.dataset.coco.loadAnns(test_dataloader.dataset.coco.getAnnIds(1208)))
         # read in PIL image and target in COCO format
         img, target = super(CarlaDetection, self).__getitem__(idx)
 
@@ -70,16 +91,36 @@ class CarlaDataset(CarlaDetection):
         image_id = self.ids[idx]
         target = {"image_id": image_id, "annotations": target, "file_name": None}
         attrs = torch.Tensor([obj["attributes"] for obj in target["annotations"]])
+        n_obj_before = len(target["annotations"])
         rel_list = self.rel[str(image_id)]
+        rel = np.array(rel_list)
         encoding = self.feature_extractor(
             images=img, annotations=target, return_tensors="pt"
         )
         pixel_values = encoding["pixel_values"].squeeze()  # remove batch dimension
         target = encoding["labels"][0]  # remove batch dimension
-        rel = np.array(rel_list)
+        target["class_labels"] -= 1  # remove 'no_relation' category
+        n_obj_after = len(target["boxes"])
+
+        # if the size happens to change during preprocess, (STILL DONT KNOW WHY)
+        # we have to figure out which boxes remain....NOT SURE HOW TO DO THIS
+        # therefore we will hack it by dropping relations/attributes from the end
+        # HACK: THIS IS NOT CORRECT, but I'm assuming this only happens a few times...
+        if n_obj_before != n_obj_after:
+            print("WARNING: THE NUMBER OF OBJECTS CHANGED DURING PREPROC!!!")
+            print(
+                "Dropping extras from the end of attrs/relations, but this is not good..."
+            )
+            attrs = attrs[:n_obj_after, :]
+            rel = rel[(rel[:, 0] < n_obj_after) & (rel[:, 1] < n_obj_after), :]
+
+        # augment relations etc.
         target["rel"] = self._get_rel_tensor(rel)
-        target["class_labels"] -= 1
         target["attrs"] = attrs
+
+        # sanity checks
+        if len(attrs) != len(target["class_labels"]):
+            raise RuntimeError(f"{len(attrs)} - {len(target['class_labels'])}")
 
         return pixel_values, target
 

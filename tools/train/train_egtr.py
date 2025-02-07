@@ -5,7 +5,6 @@
 import argparse
 import json
 import os
-from glob import glob
 from pathlib import Path
 
 import torch
@@ -31,22 +30,11 @@ from lib.evaluation.sg_eval import BasicSceneGraphEvaluator
 from util.misc import use_deterministic_algorithms
 
 
-def main(args):
-    # Feature extractor
-    feature_extractor = DeformableDetrFeatureExtractor.from_pretrained(
-        args.architecture, size=800, max_size=1333
-    )
-    feature_extractor_train = (
-        DeformableDetrFeatureExtractorWithAugmentorNoCrop.from_pretrained(
-            args.architecture, size=800, max_size=1333
-        )
-    )
-
-    # Dataset
+def get_trainval_dataloaders(args, feature_extractor):
     if "visual_genome" in args.data_path:
         train_dataset = VGDataset(
             data_folder=args.data_path,
-            feature_extractor=feature_extractor_train,
+            feature_extractor=feature_extractor,
             split="train",
             num_object_queries=args.num_queries,
             debug=args.debug,
@@ -63,7 +51,7 @@ def main(args):
     elif "carla" in args.data_path.lower():
         train_dataset = CarlaDataset(
             data_folder=args.data_path,
-            feature_extractor=feature_extractor_train,
+            feature_extractor=feature_extractor,
             split="train",
             num_object_queries=args.num_queries,
             debug=args.debug,
@@ -80,7 +68,7 @@ def main(args):
     else:
         train_dataset = OIDataset(
             data_folder=args.data_path,
-            feature_extractor=feature_extractor_train,
+            feature_extractor=feature_extractor,
             split="train",
             filter_duplicate_rels=args.filter_duplicate_rels,
             filter_multiple_rels=args.filter_multiple_rels,
@@ -116,6 +104,59 @@ def main(args):
         num_workers=args.num_workers,
         persistent_workers=True,
     )
+
+    return (
+        train_dataset,
+        val_dataset,
+        train_dataloader,
+        val_dataloader,
+        id2label,
+        fg_matrix,
+    )
+
+
+def get_test_dataloader(args, feature_extractor):
+    if "visual_genome" in args.data_path:
+        Dataset = VGDataset
+    elif "carla" in args.data_path.lower():
+        Dataset = CarlaDataset
+    else:
+        Dataset = OIDataset
+    test_dataset = Dataset(
+        data_folder=args.data_path,
+        feature_extractor=feature_extractor,
+        split=args.split,
+        num_object_queries=args.num_queries,
+    )
+    test_dataloader = DataLoader(
+        test_dataset,
+        collate_fn=lambda x: collate_fn(x, feature_extractor),
+        batch_size=args.eval_batch_size,
+        pin_memory=True,
+        num_workers=args.num_workers,
+        persistent_workers=True,
+    )
+    return test_dataloader
+
+
+def main(args):
+    # Feature extractor
+    feature_extractor = DeformableDetrFeatureExtractor.from_pretrained(
+        args.architecture, size=800, max_size=1333
+    )
+    feature_extractor_train = (
+        DeformableDetrFeatureExtractorWithAugmentorNoCrop.from_pretrained(
+            args.architecture, size=800, max_size=1333
+        )
+    )
+    (
+        train_dataset,
+        val_dataset,
+        train_dataloader,
+        val_dataloader,
+        id2label,
+        fg_matrix,
+    ) = get_trainval_dataloaders(args, feature_extractor_train)
 
     # Evaluator
     rel_categories = train_dataset.rel_categories
@@ -261,10 +302,13 @@ def main(args):
                 print(e)
 
         if args.finetune:
-            ckpt_path = sorted(  # load best model
-                glob(f"{logger.log_dir}/checkpoints/epoch=*.ckpt"),
-                key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
-            )[-1]
+            ckpt_path = get_checkpoint(
+                args.resume, args.initial_ckpt_dir, logger.log_dir
+            )
+            # ckpt_path = sorted(  # load best model
+            #     glob(f"{logger.log_dir}/checkpoints/epoch=*.ckpt"),
+            #     key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
+            # )[-1]
 
             # Finetune trainer setting
             logger = TensorBoardLogger(
@@ -311,6 +355,8 @@ def main(args):
                 connectivity_loss_coefficient=args.connectivity_loss_coefficient,
                 logit_adjustment=args.logit_adjustment,
                 logit_adj_tau=args.logit_adj_tau,
+                train_dataloader=train_dataloader,
+                val_dataloader=val_dataloader,
             )
 
             # Finetune callback
@@ -357,10 +403,11 @@ def main(args):
             )
 
         # Load best model
-        ckpt_path = sorted(
-            glob(f"{logger.log_dir}/checkpoints/epoch=*.ckpt"),
-            key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
-        )[-1]
+        ckpt_path = get_checkpoint(args.resume, args.initial_ckpt_dir, logger.log_dir)
+        # ckpt_path = sorted(
+        #     glob(f"{logger.log_dir}/checkpoints/epoch=*.ckpt"),
+        #     key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
+        # )[-1]
         state_dict = torch.load(ckpt_path, map_location="cpu")["state_dict"]
         for k in list(state_dict.keys()):
             state_dict[k[6:]] = state_dict.pop(k)  # "model."
@@ -370,26 +417,7 @@ def main(args):
         trainer = Trainer(
             precision=args.precision, logger=logger, gpus=1, max_epochs=-1
         )
-        if "visual_genome" in args.data_path:
-            Dataset = VGDataset
-        elif "carla" in args.data_path:
-            Dataset = CarlaDataset
-        else:
-            Dataset = OIDataset
-        test_dataset = Dataset(
-            data_folder=args.data_path,
-            feature_extractor=feature_extractor,
-            split=args.split,
-            num_object_queries=args.num_queries,
-        )
-        test_dataloader = DataLoader(
-            test_dataset,
-            collate_fn=lambda x: collate_fn(x, feature_extractor),
-            batch_size=args.eval_batch_size,
-            pin_memory=True,
-            num_workers=args.num_workers,
-            persistent_workers=True,
-        )
+        test_dataloader = get_test_dataloader(args, feature_extractor)
         if trainer.is_global_zero:
             print("### Evaluation")
         metric = trainer.test(module, dataloaders=test_dataloader)

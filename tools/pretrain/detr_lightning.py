@@ -116,7 +116,8 @@ class Detr(pl.LightningModule):
             [target["orig_size"] for target in labels], dim=0
         )
         results = self.feature_extractor.post_process(
-            outputs, orig_target_sizes
+            outputs,
+            orig_target_sizes,
         )  # convert outputs of model to COCO api
         res = {
             target["image_id"].item(): output for target, output in zip(labels, results)

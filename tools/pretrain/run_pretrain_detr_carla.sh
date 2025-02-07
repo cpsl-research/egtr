@@ -11,6 +11,7 @@ GPUS=${5:-2}
 # PRETRAIN_DIRPATH=${4:-"/data/shared/models/detr/model/pretrained_detr__SenseTime__deformable-detr/batch__32__epochs__150_50__lr__1e-05_0.0001__visual_genome__finetune/version_0"}
 
 # Train DETR on CARLA
+CUDA_LAUNCH_BLOCKING=1
 python pretrain_detr.py \
     --data_path $DATA_PATH \
     --output_path $OUTPUT_PATH \
@@ -18,9 +19,9 @@ python pretrain_detr.py \
     --memo $MEMO \
     --max_epochs 150 \
     --max_epochs_finetune 50 \
-    --gpus $GPUS \
+    --gpus 2 \
     --skip_train false \
     --finetune true \
-    --resume true
+    --resume false
     # --load_initial_ckpt false \
     # --initial_ckpt_dir $PRETRAIN_DIRPATH \

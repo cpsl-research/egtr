@@ -32,7 +32,7 @@ class VGDetection(torchvision.datasets.CocoDetection):
         )
         pixel_values = encoding["pixel_values"].squeeze()  # remove batch dimension
         target = encoding["labels"][0]  # remove batch dimension
-        target["class_labels"] -= 1  # remove 'no_relation' category
+        target["class_labels"] -= 1  # because the VG class starts at 1
         return pixel_values, target
 
     def __len__(self):
