@@ -6,7 +6,7 @@ set -e
 DATA_PATH=${1:-"/data/shared/CARLA/scenes-for-egtr/processed"}
 OUTPUT_PATH=${2:-"/data/shared/models/egtr/model"}
 BACKBONE_DIRPATH=${3:-"/data/shared/models/detr/backbone"}
-DETR_DIRPATH=${4:-'/data/shared/models/detr/model/pretrained_detr__SenseTime__deformable-detr/batch__8__epochs__150_50__lr__1e-05_0.0001__carla_detection/version_2/checkpoints'}
+DETR_DIRPATH=${4:-'/data/shared/models/detr/model/pretrained_detr__SenseTime__deformable-detr/batch__8__epochs__150_50__lr__1e-05_0.0001__carla_detection__finetune/version_0/'}
 MEMO=${4:-"carla_sgg"}
 GPUS=${5:-2}
 
@@ -18,8 +18,8 @@ python train_egtr.py \
     --output_path $OUTPUT_PATH \
     --backbone_dirpath $BACKBONE_DIRPATH \
     --memo $MEMO \
-    --from_scratch true \
-    --pretrained architecture \
+    --from_scratch false \
+    --pretrained $DETR_DIRPATH \
     --gpus 2 \
     --skip_train false \
     --finetune true \
