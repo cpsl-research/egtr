@@ -205,6 +205,7 @@ class DeformableDetrConfig(PretrainedConfig):
         two_stage=False,
         two_stage_num_proposals=300,
         with_box_refine=False,
+        n_attributes=4,
         class_cost=1,
         bbox_cost=5,
         giou_cost=2,
@@ -212,6 +213,7 @@ class DeformableDetrConfig(PretrainedConfig):
         dice_loss_coefficient=1,
         bbox_loss_coefficient=5,
         giou_loss_coefficient=2,
+        attr_loss_coefficient=1,
         eos_coefficient=0.1,
         focal_alpha=0.25,
         **kwargs,
@@ -246,6 +248,8 @@ class DeformableDetrConfig(PretrainedConfig):
         self.with_box_refine = with_box_refine
         if two_stage is True and with_box_refine is False:
             raise ValueError("If two_stage is True, with_box_refine must be True.")
+        # attribute prediction
+        self.n_attributes = n_attributes
         # Hungarian matcher
         self.class_cost = class_cost
         self.bbox_cost = bbox_cost
@@ -255,6 +259,7 @@ class DeformableDetrConfig(PretrainedConfig):
         self.dice_loss_coefficient = dice_loss_coefficient
         self.bbox_loss_coefficient = bbox_loss_coefficient
         self.giou_loss_coefficient = giou_loss_coefficient
+        self.attr_loss_coefficient = attr_loss_coefficient
         self.eos_coefficient = eos_coefficient
         self.focal_alpha = focal_alpha
         super().__init__(is_encoder_decoder=is_encoder_decoder, **kwargs)
@@ -270,6 +275,10 @@ class DeformableDetrConfig(PretrainedConfig):
 
 class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
     # only different post_process
+
+    def __call__(self, images, **kwargs):
+        return super().__call__(images, **kwargs)
+
     # https://github.com/huggingface/transformers/pull/19140/files#diff-1a733eaefea2a0e31453af1f2df3808bddd73900d61ec714d11dc25547ed0194
     def post_process(self, outputs, target_sizes):
         """
@@ -286,7 +295,11 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
             `List[Dict]`: A list of dictionaries, each dictionary containing the scores, labels and boxes for an image
             in the batch as predicted by the model.
         """
-        out_logits, out_bbox = outputs.logits, outputs.pred_boxes
+        out_logits, out_bbox, out_attr = (
+            outputs.logits,
+            outputs.pred_boxes,
+            outputs.pred_attrs,
+        )
 
         if len(out_logits) != len(target_sizes):
             raise ValueError(
@@ -297,12 +310,15 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
                 "Each element of target_sizes must contain the size (h, w) of each image of the batch"
             )
 
+        # box existence score prediction
         prob = out_logits.sigmoid()
         topk_values, topk_indexes = torch.topk(
             prob.view(out_logits.shape[0], -1), 100, dim=1
         )
         scores = topk_values
         topk_boxes = torch.div(topk_indexes, out_logits.shape[2], rounding_mode="trunc")
+
+        # box predictions
         labels = topk_indexes % out_logits.shape[2]
         boxes = center_to_corners_format(out_bbox)
         boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, 4))
@@ -312,9 +328,15 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
         boxes = boxes * scale_fct[:, None, :]
 
+        # get attribute prediction with scaling
+        attrs = torch.gather(
+            out_attr, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, out_attr.shape[2])
+        )
+
+        # package the results
         results = [
-            {"scores": s, "labels": l, "boxes": b}
-            for s, l, b in zip(scores, labels, boxes)
+            {"scores": s, "labels": l, "boxes": b, "attrs": a}
+            for s, l, b, a in zip(scores, labels, boxes, attrs)
         ]
 
         return results
@@ -555,6 +577,8 @@ class DeformableDetrModelOutput(ModelOutput):
             foreground and background).
         enc_outputs_coord_logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, 4)`, *optional*, returned when `config.with_box_refine=True` and `config.two_stage=True`):
             Logits of predicted bounding boxes coordinates in the first stage.
+        enc_outputs_attr_logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, n_attr)`, *optional*, returned when `config.with_box_refine=True` and `config.two_stage=True`):
+            Logits of predicted attributes in the first stage
     """
 
     init_reference_points: torch.FloatTensor = None
@@ -569,6 +593,7 @@ class DeformableDetrModelOutput(ModelOutput):
     encoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
     enc_outputs_class: Optional[torch.FloatTensor] = None
     enc_outputs_coord_logits: Optional[torch.FloatTensor] = None
+    enc_outputs_attr_logits: Optional[torch.FloatTensor] = None
     decoder_attention_queries: Optional[torch.FloatTensor] = None
     decoder_attention_keys: Optional[torch.FloatTensor] = None
 
@@ -637,6 +662,7 @@ class DeformableDetrObjectDetectionOutput(ModelOutput):
     loss_dict: Optional[Dict] = None
     logits: torch.FloatTensor = None
     pred_boxes: torch.FloatTensor = None
+    pred_attrs: torch.FloatTensor = None
     auxiliary_outputs: Optional[List[Dict]] = None
     init_reference_points: Optional[torch.FloatTensor] = None
     last_hidden_state: Optional[torch.FloatTensor] = None
@@ -650,6 +676,7 @@ class DeformableDetrObjectDetectionOutput(ModelOutput):
     encoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
     enc_outputs_class: Optional[torch.FloatTensor] = None
     enc_outputs_coord_logits: Optional[torch.FloatTensor] = None
+    enc_outputs_attr_logits: Optional[torch.FloatTensor] = None
 
 
 def _get_clones(module, N):
@@ -1767,6 +1794,7 @@ class DeformableDetrDecoder(DeformableDetrPreTrainedModel):
 
         # hack implementation for iterative bounding box refinement and two-stage Deformable DETR
         self.bbox_embed = None
+        self.attr_embed = None
         self.class_embed = None
 
         # Initialize weights and apply final processing
@@ -2303,6 +2331,7 @@ class DeformableDetrModel(DeformableDetrPreTrainedModel):
         # Fifth, prepare decoder inputs
         batch_size, _, num_channels = encoder_outputs[0].shape
         enc_outputs_class = None
+        enc_outputs_attr_logits = None
         enc_outputs_coord_logits = None
         if self.config.two_stage:
             (
@@ -2316,6 +2345,11 @@ class DeformableDetrModel(DeformableDetrPreTrainedModel):
             # apply a detection head to each pixel (A.4 in paper)
             # linear projection for bounding box binary classification (i.e. foreground and background)
             enc_outputs_class = self.decoder.class_embed[-1](object_query_embedding)
+            # small FFN to predict other attributes (attribute regression)
+            if self.decoder.attr_embed is not None:
+                raise NotADirectoryError(
+                    "Have not implemented attribute encoding for two stage"
+                )
             # 3-layer FFN to predict bounding boxes coordinates (bbox regression branch)
             delta_bbox = self.decoder.bbox_embed[-1](object_query_embedding)
             enc_outputs_coord_logits = delta_bbox + output_proposals
@@ -2329,6 +2363,7 @@ class DeformableDetrModel(DeformableDetrPreTrainedModel):
                 topk_proposals.unsqueeze(-1).repeat(1, 1, 4),
             )
 
+            # pass coordinates through sigmoid
             topk_coords_logits = topk_coords_logits.detach()
             reference_points = topk_coords_logits.sigmoid()
             init_reference_points = reference_points
@@ -2361,7 +2396,11 @@ class DeformableDetrModel(DeformableDetrPreTrainedModel):
         if not return_dict:
             enc_outputs = tuple(
                 value
-                for value in [enc_outputs_class, enc_outputs_coord_logits]
+                for value in [
+                    enc_outputs_class,
+                    enc_outputs_coord_logits,
+                    enc_outputs_attr_logits,
+                ]
                 if value is not None
             )
             tuple_outputs = (
@@ -2388,6 +2427,7 @@ class DeformableDetrModel(DeformableDetrPreTrainedModel):
             encoder_attentions=encoder_outputs.attentions,
             enc_outputs_class=enc_outputs_class,
             enc_outputs_coord_logits=enc_outputs_coord_logits,
+            enc_outputs_attr_logits=enc_outputs_attr_logits,
         )
 
 
@@ -2413,12 +2453,24 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             output_dim=4,
             num_layers=3,
         )
+        self.attr_embed = DeformableDetrMLPPredictionHead(
+            input_dim=config.d_model,
+            hidden_dim=config.d_model,
+            output_dim=config.n_attributes,
+            num_layers=3,
+        )
 
+        # Initialize the detection heads
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
+        # -- classification
         self.class_embed.bias.data = torch.ones(config.num_labels) * bias_value
+        # -- bbox embedding
         nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
         nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
+        # -- attribute embedding
+        nn.init.constant_(self.attr_embed.layers[-1].weight.data, 0)
+        nn.init.constant_(self.attr_embed.layers[-1].bias.data, 0)
 
         # if two-stage, the last class_embed and bbox_embed is for region proposal generation
         num_pred = (
@@ -2427,6 +2479,8 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
         if config.with_box_refine:
             self.class_embed = _get_clones(self.class_embed, num_pred)
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
+            self.attr_embed = _get_clones(self.attr_embed, num_pred)
+            nn.init.constant_(self.attr_embed[0].layers[-1].bias.data[2:], -2.0)
             nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             # hack implementation for iterative bounding box refinement
             self.model.decoder.bbox_embed = self.bbox_embed
@@ -2436,25 +2490,30 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
                 [self.class_embed for _ in range(num_pred)]
             )
             self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
+            self.attr_embed = nn.ModuleList([self.attr_embed for _ in range(num_pred)])
             self.model.decoder.bbox_embed = None
         if config.two_stage:
             # hack implementation for two-stage
             self.model.decoder.class_embed = self.class_embed
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
+            for attr_embed in self.attr_embed:
+                nn.init.constant_(attr_embed.layers[-1].bias.data[2:], 0.0)
 
         # Initialize weights and apply final processing
         self.post_init()
 
     # taken from https://github.com/facebookresearch/detr/blob/master/models/detr.py
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_coord):
+    def _set_aux_loss(self, outputs_class, outputs_coord, outputs_attr):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
         return [
-            {"logits": a, "pred_boxes": b}
-            for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
+            {"logits": l, "pred_boxes": b, "pred_attrs": a}
+            for l, b, a in zip(
+                outputs_class[:-1], outputs_coord[:-1], outputs_attr[:-1]
+            )
         ]
 
     def forward(
@@ -2528,9 +2587,10 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             outputs.intermediate_reference_points if return_dict else outputs[3]
         )
 
-        # class logits + predicted bounding boxes
+        # class logits + predicted bounding boxes + predicted attributes
         outputs_classes = []
         outputs_coords = []
+        outputs_attrs = []
 
         for level in range(hidden_states.shape[1]):
             if level == 0:
@@ -2538,7 +2598,11 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             else:
                 reference = inter_references[:, level - 1]
             reference = inverse_sigmoid(reference)
+
+            # object class inference
             outputs_class = self.class_embed[level](hidden_states[:, level])
+
+            # box coordinate inference
             delta_bbox = self.bbox_embed[level](hidden_states[:, level])
             if reference.shape[-1] == 4:
                 outputs_coord_logits = delta_bbox + reference
@@ -2550,14 +2614,23 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
                     f"reference.shape[-1] should be 4 or 2, but got {reference.shape[-1]}"
                 )
             outputs_coord = outputs_coord_logits.sigmoid()
+
+            # attribute inference
+            outputs_attr_logits = self.attr_embed[level](hidden_states[:, level])
+            outputs_attr = outputs_attr_logits.sigmoid()
+
+            # append predictions
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
+            outputs_attrs.append(outputs_attr)
+
         # Keep batch_size as first dimension
         outputs_class = torch.stack(outputs_classes, dim=1)
         outputs_coord = torch.stack(outputs_coords, dim=1)
-
+        outputs_attr = torch.stack(outputs_attrs, dim=1)
         logits = outputs_class[:, -1]
         pred_boxes = outputs_coord[:, -1]
+        pred_attrs = outputs_attr[:, -1]
 
         loss, loss_dict, auxiliary_outputs = None, None, None
         if labels is not None:
@@ -2568,7 +2641,7 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
                 giou_cost=self.config.giou_cost,
             )
             # Second: create the criterion
-            losses = ["labels", "boxes", "cardinality"]
+            losses = ["labels", "boxes", "cardinality", "attributes"]
             criterion = DeformableDetrLoss(
                 matcher=matcher,
                 num_classes=self.config.num_labels,
@@ -2581,23 +2654,31 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             outputs_loss = {}
             outputs_loss["logits"] = logits
             outputs_loss["pred_boxes"] = pred_boxes
+            outputs_loss["pred_attrs"] = pred_attrs
             if self.config.auxiliary_loss:
                 outputs_class = outputs_class.permute(1, 0, 2, 3)
                 outputs_coord = outputs_coord.permute(1, 0, 2, 3)
-                auxiliary_outputs = self._set_aux_loss(outputs_class, outputs_coord)
+                outputs_attr = outputs_attr.permute(1, 0, 2, 3)
+                auxiliary_outputs = self._set_aux_loss(
+                    outputs_class, outputs_coord, outputs_attr
+                )
                 outputs_loss["auxiliary_outputs"] = auxiliary_outputs
             if self.config.two_stage:
                 enc_outputs_coord = outputs.enc_outputs_coord_logits.sigmoid()
+                enc_outputs_attr = outputs.enc_outputs_attr_logits.sigmoid()
                 outputs_loss["enc_outputs"] = {
                     "logits": outputs.enc_outputs_class,
                     "pred_boxes": enc_outputs_coord,
+                    "pred_attrs": enc_outputs_attr,
                 }
 
             loss_dict = criterion(outputs_loss, labels)
+
             # Fourth: compute total loss, as a weighted sum of the various losses
             weight_dict = {
                 "loss_ce": self.config.ce_loss_coefficient,
                 "loss_bbox": self.config.bbox_loss_coefficient,
+                "loss_attr": self.config.attr_loss_coefficient,
             }
             weight_dict["loss_giou"] = self.config.giou_loss_coefficient
             aux_weight_dict = {}
@@ -2620,9 +2701,9 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
 
         if not return_dict:
             if auxiliary_outputs is not None:
-                output = (logits, pred_boxes) + auxiliary_outputs + outputs
+                output = (logits, pred_boxes, pred_attrs) + auxiliary_outputs + outputs
             else:
-                output = (logits, pred_boxes) + outputs
+                output = (logits, pred_boxes, pred_attrs) + outputs
             tuple_outputs = ((loss, loss_dict) + output) if loss is not None else output
 
             return tuple_outputs
@@ -2632,6 +2713,7 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             loss_dict=loss_dict,
             logits=logits,
             pred_boxes=pred_boxes,
+            pred_attrs=pred_attrs,
             auxiliary_outputs=auxiliary_outputs,
             last_hidden_state=outputs.last_hidden_state,
             decoder_hidden_states=outputs.decoder_hidden_states,
@@ -2645,6 +2727,7 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
             intermediate_reference_points=outputs.intermediate_reference_points,
             enc_outputs_class=outputs.enc_outputs_class,
             enc_outputs_coord_logits=outputs.enc_outputs_coord_logits,
+            enc_outputs_attr_logits=outputs.enc_outputs_attr_logits,
         )
 
         return dict_outputs
@@ -2775,6 +2858,31 @@ class DeformableDetrLoss(nn.Module):
         losses["loss_giou"] = loss_giou.sum() / num_boxes
         return losses
 
+    def loss_attributes(self, outputs, targets, indices, num_boxes, use_l1=False):
+        """
+        Compute the loss related to the attributes, using L1 or L2 regression
+        Targets dict must contain the key "attrs" containing a tensor of dim [num_boxes, num_attrs].
+        The attributes are expected as between [-1.0, 1.0] by a sigmoid function.
+        TODO: each attribute could have custom loss function (e.g., for angles)
+        """
+
+        idx = self._get_source_permutation_idx(indices)
+        source_attrs = outputs["pred_attrs"][idx]
+        target_attrs = torch.cat(
+            [t["attrs"][i] for t, (_, i) in zip(targets, indices)], dim=0
+        )
+
+        if use_l1:
+            loss_attr = nn.functional.l1_loss(source_attrs, target_attrs)
+        else:
+            loss_attr = nn.functional.mse_loss(source_attrs, target_attrs)
+
+        num_attrs = source_attrs.shape[1]
+        losses = {}
+        # losses["loss_attr"] = loss_attr.sum() / (num_boxes * num_attrs)
+        losses["loss_attr"] = loss_attr
+        return losses
+
     def _get_source_permutation_idx(self, indices):
         # permute predictions following indices
         batch_idx = torch.cat(
@@ -2796,6 +2904,7 @@ class DeformableDetrLoss(nn.Module):
             "labels": self.loss_labels,
             "cardinality": self.loss_cardinality,
             "boxes": self.loss_boxes,
+            "attributes": self.loss_attributes,
         }
         if loss not in loss_map:
             raise ValueError(f"Loss {loss} not supported")

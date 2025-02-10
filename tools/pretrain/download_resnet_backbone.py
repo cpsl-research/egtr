@@ -21,6 +21,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("backbone_dirpath", type=str)
+    parser.add_argument(
+        "backbone_dirpath", default="/data/shared/models/detr/backbone", type=str
+    )
     args = parser.parse_args()
     main(args)

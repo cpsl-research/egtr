@@ -157,7 +157,10 @@ def evaluate_from_dict(
 
     for k in result_dict[mode + "_recall"]:
         match = reduce(np.union1d, pred_to_gt[:k])
-        rec_i = float(len(match)) / float(gt_rels.shape[0])
+        if gt_rels.shape[0] == 0:
+            rec_i = 0
+        else:
+            rec_i = float(len(match)) / float(gt_rels.shape[0])
         result_dict[mode + "_recall"][k].append(rec_i)
     return pred_to_gt, pred_5ples, rel_scores
 
@@ -193,7 +196,7 @@ def evaluate_recall(
 
     num_gt_boxes = gt_boxes.shape[0]
     num_gt_relations = gt_rels.shape[0]
-    assert num_gt_relations != 0
+    # assert num_gt_relations != 0
 
     gt_triplets, gt_triplet_boxes, _ = _triplet(
         gt_rels[:, 2], gt_rels[:, :2], gt_classes, gt_boxes
@@ -261,7 +264,11 @@ def _triplet(
     """
     assert predicates.shape[0] == relations.shape[0]
 
-    sub_ob_classes = classes[relations[:, :2]]
+    try:
+        sub_ob_classes = classes[relations[:, :2]]
+    except IndexError:
+        breakpoint()
+        raise
     triplets = np.column_stack((sub_ob_classes[:, 0], predicates, sub_ob_classes[:, 1]))
     triplet_boxes = np.column_stack((boxes[relations[:, 0]], boxes[relations[:, 1]]))
 
