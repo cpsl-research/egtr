@@ -319,6 +319,7 @@ def evaluate_batch(
         obj_scores, pred_classes = torch.max(
             pred_logits.softmax(-1)[:, :num_labels], -1
         )
+        breakpoint()
         sub_ob_scores = torch.outer(obj_scores, obj_scores)
         sub_ob_scores[
             torch.arange(pred_logits.size(0)), torch.arange(pred_logits.size(0))

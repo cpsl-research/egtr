@@ -134,7 +134,7 @@ def main(args):
                                         "iscrowd": 0,
                                         "segmentation": [[]],  # TODO: segmentation mask
                                         "area": 1000,  # TODO: segmentation area
-                                        "range": range_obj,
+                                        "range_obj": range_obj,
                                         "volume_3d": volume_3d,
                                         "fraction_visible": fraction_visible,
                                         "orientation_3d": orientation_3d,

@@ -33,6 +33,7 @@ import copy
 import importlib
 import math
 import warnings
+import numpy as np
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -58,6 +59,7 @@ from transformers.modeling_utils import PretrainedConfig, PreTrainedModel
 from transformers.utils import logging
 
 import egtr.transform as T
+from lib.pytorch_misc import argsort_desc
 
 from .load_custom import load_cuda_kernels
 from .util import generalized_box_iou, sigmoid_focal_loss
@@ -280,7 +282,7 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
         return super().__call__(images, **kwargs)
 
     # https://github.com/huggingface/transformers/pull/19140/files#diff-1a733eaefea2a0e31453af1f2df3808bddd73900d61ec714d11dc25547ed0194
-    def post_process(self, outputs, target_sizes):
+    def post_process(self, outputs, target_sizes, max_topk: int = 100):
         """
         Converts the output of [`DeformableDetrForObjectDetection`] into the format expected by the COCO api. Only
         supports PyTorch.
@@ -313,7 +315,7 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
         # box existence score prediction
         prob = out_logits.sigmoid()
         topk_values, topk_indexes = torch.topk(
-            prob.view(out_logits.shape[0], -1), 100, dim=1
+            prob.view(out_logits.shape[0], -1), max_topk, dim=1
         )
         scores = topk_values
         topk_boxes = torch.div(topk_indexes, out_logits.shape[2], rounding_mode="trunc")
@@ -333,10 +335,46 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
             out_attr, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, out_attr.shape[2])
         )
 
+        # also get the relations, if available
+        if hasattr(outputs, "pred_rel"):
+            # NOTE: the [0] index is due to batching (batch size of 1)
+            # get pred rel
+            pred_rel = torch.clamp(outputs["pred_rel"][0], 0.0, 1.0)
+            pred_connectivity = torch.clamp(outputs["pred_connectivity"][0], 0.0, 1.0)
+            pred_rel = torch.mul(pred_rel, pred_connectivity)
+
+            # class scores
+            pred_logits = outputs["logits"][0]
+            obj_scores, pred_classes = torch.max(pred_logits.softmax(-1)[:, :5], -1)
+            sub_ob_scores = torch.outer(obj_scores, obj_scores)
+            sub_ob_scores[
+                torch.arange(pred_logits.size(0)), torch.arange(pred_logits.size(0))
+            ] = 0.0  # prevent self-connection
+
+            # compute pred rel scores
+            triplet_scores = torch.mul(pred_rel, sub_ob_scores.unsqueeze(-1))
+            pred_rel_inds = argsort_desc(triplet_scores.cpu().clone().numpy())[
+                :max_topk, :
+            ]  # [pred_rels, 3(s,o,p)]
+            rel_scores = (
+                pred_rel.cpu()
+                .clone()
+                .numpy()[pred_rel_inds[:, 0], pred_rel_inds[:, 1], pred_rel_inds[:, 2]]
+            )  # [pred_rels]
+            # HACK for batching
+            pred_rel_inds = pred_rel_inds[np.newaxis, :]
+            rel_scores = rel_scores[np.newaxis, :]
+        else:
+            # HACK for batching
+            pred_rel_inds = [[None] * len(scores)]
+            rel_scores=  [[None] * len(scores)]
+
+        breakpoint()
+
         # package the results
         results = [
-            {"scores": s, "labels": l, "boxes": b, "attrs": a}
-            for s, l, b, a in zip(scores, labels, boxes, attrs)
+            {"scores": s, "labels": l, "boxes": b, "attrs": a, "pred_rel_inds": ri, "rel_scores": rs}
+            for s, l, b, a, ri, rs in zip(scores, labels, boxes, attrs, pred_rel_inds, rel_scores)
         ]
 
         return results

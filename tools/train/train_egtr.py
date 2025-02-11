@@ -305,11 +305,7 @@ def main(args):
             ckpt_path = get_checkpoint(
                 args.resume, args.initial_ckpt_dir, logger.log_dir
             )
-            # ckpt_path = sorted(  # load best model
-            #     glob(f"{logger.log_dir}/checkpoints/epoch=*.ckpt"),
-            #     key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
-            # )[-1]
-
+            
             # Finetune trainer setting
             logger = TensorBoardLogger(
                 save_dir, name=f"{name}__finetune", version=version
