@@ -33,10 +33,10 @@ import copy
 import importlib
 import math
 import warnings
-import numpy as np
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
@@ -59,7 +59,7 @@ from transformers.modeling_utils import PretrainedConfig, PreTrainedModel
 from transformers.utils import logging
 
 import egtr.transform as T
-from lib.pytorch_misc import argsort_desc
+from lib.pytorch_misc import argsort_desc_torch
 
 from .load_custom import load_cuda_kernels
 from .util import generalized_box_iou, sigmoid_focal_loss
@@ -353,28 +353,63 @@ class DeformableDetrFeatureExtractor(DetrFeatureExtractor):
 
             # compute pred rel scores
             triplet_scores = torch.mul(pred_rel, sub_ob_scores.unsqueeze(-1))
-            pred_rel_inds = argsort_desc(triplet_scores.cpu().clone().numpy())[
+            pred_rel_inds = argsort_desc_torch(triplet_scores)[
                 :max_topk, :
             ]  # [pred_rels, 3(s,o,p)]
-            rel_scores = (
-                pred_rel.cpu()
-                .clone()
-                .numpy()[pred_rel_inds[:, 0], pred_rel_inds[:, 1], pred_rel_inds[:, 2]]
-            )  # [pred_rels]
+            rel_scores = pred_rel[
+                pred_rel_inds[:, 0], pred_rel_inds[:, 1], pred_rel_inds[:, 2]
+            ]
             # HACK for batching
             pred_rel_inds = pred_rel_inds[np.newaxis, :]
             rel_scores = rel_scores[np.newaxis, :]
+
+            # only consider relations that are among the topk boxes
+            # relations are (subject, object, predicate, score)
+            topk_rels = torch.all(*torch.isin(pred_rel_inds[:, :, :2], topk_boxes), 1)
+            pred_rel_inds = pred_rel_inds[:, topk_rels, :]
+            rel_scores = rel_scores[:, topk_rels]
+
+            # map indices to their slot in the boxes
+            idx_col_1 = (
+                pred_rel_inds[0, :, 0].unsqueeze(1) == topk_boxes[0, :]
+            ).nonzero()
+            idx_col_2 = (
+                pred_rel_inds[0, :, 1].unsqueeze(1) == topk_boxes[0, :]
+            ).nonzero()
+
+            # since multiple entries can exist for same box different class, take the first
+            idx_first_1 = torch.nonzero(
+                torch.cat(
+                    (torch.ones(1, device=scores.device), torch.diff(idx_col_1[:, 0]))
+                )
+            )
+            idx_first_2 = torch.nonzero(
+                torch.cat(
+                    (torch.ones(1, device=scores.device), torch.diff(idx_col_2[:, 0]))
+                )
+            )
+
+            # index back into relations
+            pred_rel_inds[0, idx_col_1[idx_first_1, 0], 0] = idx_col_1[idx_first_1, 1]
+            pred_rel_inds[0, idx_col_2[idx_first_2, 0], 1] = idx_col_2[idx_first_2, 1]
         else:
             # HACK for batching
-            pred_rel_inds = [[None] * len(scores)]
-            rel_scores=  [[None] * len(scores)]
-
-        breakpoint()
+            pred_rel_inds = torch.zeros((1, 0, 3), device=scores.device)
+            rel_scores = torch.zeros((1, 0), device=scores.device)
 
         # package the results
         results = [
-            {"scores": s, "labels": l, "boxes": b, "attrs": a, "pred_rel_inds": ri, "rel_scores": rs}
-            for s, l, b, a, ri, rs in zip(scores, labels, boxes, attrs, pred_rel_inds, rel_scores)
+            {
+                "scores": s,
+                "labels": l,
+                "boxes": b,
+                "attrs": a,
+                "relations": ri,
+                "rel_scores": rs,
+            }
+            for s, l, b, a, ri, rs in zip(
+                scores, labels, boxes, attrs, pred_rel_inds, rel_scores
+            )
         ]
 
         return results

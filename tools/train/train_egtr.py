@@ -305,7 +305,7 @@ def main(args):
             ckpt_path = get_checkpoint(
                 args.resume, args.initial_ckpt_dir, logger.log_dir
             )
-            
+
             # Finetune trainer setting
             logger = TensorBoardLogger(
                 save_dir, name=f"{name}__finetune", version=version

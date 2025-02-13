@@ -319,7 +319,6 @@ def evaluate_batch(
         obj_scores, pred_classes = torch.max(
             pred_logits.softmax(-1)[:, :num_labels], -1
         )
-        breakpoint()
         sub_ob_scores = torch.outer(obj_scores, obj_scores)
         sub_ob_scores[
             torch.arange(pred_logits.size(0)), torch.arange(pred_logits.size(0))
@@ -344,6 +343,8 @@ def evaluate_batch(
             .numpy(),
             "gt_classes": target_labels.clone().numpy(),
         }
+
+        breakpoint()
 
         if multiple_sgg_evaluator is not None:
             triplet_scores = torch.mul(pred_rel, sub_ob_scores.unsqueeze(-1))
@@ -388,7 +389,7 @@ def evaluate_batch(
             ]  # [pred_rels, 2(s,o)]
             rel_scores = (
                 pred_rel.cpu().clone().numpy()[pred_rel_inds[:, 0], pred_rel_inds[:, 1]]
-            )  # [pred_rels, 50]
+            )  # [pred_rels, max_topk]
 
             pred_entry = {
                 "pred_boxes": rescale_bboxes(

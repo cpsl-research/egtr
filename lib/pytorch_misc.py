@@ -4,6 +4,7 @@
 Miscellaneous functions that might be useful for pytorch
 """
 
+import torch
 import numpy as np
 
 
@@ -32,3 +33,16 @@ def argsort_desc(scores):
              need to get the score.
     """
     return np.column_stack(np.unravel_index(np.argsort(-scores.ravel()), scores.shape))
+
+
+def unravel_index(index, shape):
+    out = []
+    for dim in reversed(shape):
+        out.append(index % dim)
+        index = index // dim
+    return tuple(reversed(out))
+
+
+def argsort_desc_torch(scores):
+    """Like the above but with a tensor in/out"""
+    return torch.column_stack(unravel_index(torch.argsort(-scores.ravel()), scores.shape))

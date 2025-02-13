@@ -16,14 +16,6 @@ class CarlaDetection(torchvision.datasets.CocoDetection):
         self.split = split
         self.debug = debug
 
-    def get_image(self, idx):
-        img, _ = super(CarlaDetection, self).__getitem__(idx)
-        return img
-
-    def get_target(self, idx):
-        _, target = super(CarlaDetection, self).__getitem__(idx)
-        return target
-
     def __getitem__(self, idx):
         # read in PIL image and target in COCO format
         img, target = super(CarlaDetection, self).__getitem__(idx)
@@ -67,6 +59,14 @@ class CarlaDetection(torchvision.datasets.CocoDetection):
         attr_scale_fct = attr_bounds[:, 1] - attr_bounds[:, 0]
         attrs = attrs * attr_scale_fct[None, None, :] + attr_bias_fct[None, None, :]
         return attrs
+
+    def get_image(self, idx):
+        img, _ = super(CarlaDetection, self).__getitem__(idx)
+        return img
+
+    def get_target(self, idx):
+        _, target = super(CarlaDetection, self).__getitem__(idx)
+        return target
 
 
 class CarlaDataset(CarlaDetection):
@@ -123,6 +123,9 @@ class CarlaDataset(CarlaDetection):
             raise RuntimeError(f"{len(attrs)} - {len(target['class_labels'])}")
 
         return pixel_values, target
+
+    def get_relations(self, idx):
+        return np.array(self.rel[str(self.ids[idx])])
 
     def _get_rel_tensor(self, rel_tensor):
         rel = torch.zeros(

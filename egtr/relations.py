@@ -84,8 +84,8 @@ class Following(RelationOperator):
     def _evaluate(
         obj1: "ObjectState",
         obj2: "ObjectState",
-        distance_long_max: float = 5,
-        distance_lat_thresh: float = 1,
+        distance_long_max: float = 15,
+        distance_lat_thresh: float = 10,
         difference_heading_thresh: float = math.pi / 5,
     ) -> bool:
 
@@ -172,7 +172,7 @@ class FrontOf(RelationOperator):
         obj1: "ObjectState",
         obj2: "ObjectState",
         distance_lat_thresh: float = 5,
-        distance_long_min: float = 2,
+        distance_long_min: float = 1.0,
     ) -> bool:
 
         # condition 1: lateral distance is moderate
@@ -211,7 +211,7 @@ class Near(RelationOperator):
     def _evaluate(
         obj1: "ObjectState",
         obj2: "ObjectState",
-        distance_threshold: float = 5,
+        distance_threshold: float = 8,
     ) -> bool:
         return obj1.distance(obj2) <= distance_threshold
 
@@ -247,7 +247,7 @@ class Occluding(RelationOperator):
     def _evaluate(
         obj1: "ObjectState",
         obj2: "ObjectState",
-        vector_angle_difference_min: float = 2 * np.pi / 180,
+        vector_angle_difference_min: float = 2 * np.pi / 150,
     ) -> bool:
         """Only evaluating in BEV for simplicity
 
