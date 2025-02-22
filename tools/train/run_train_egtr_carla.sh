@@ -21,8 +21,8 @@ python train_egtr.py \
     --from_scratch false \
     --pretrained $DETR_DIRPATH \
     --gpus 2 \
-    --skip_train true \
+    --skip_train false \
     --finetune true \
-    --max_epochs 100 \
+    --max_epochs 200 \
     --max_epochs_finetune 40 \
-    --resume true
+    --resume false

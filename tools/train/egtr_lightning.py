@@ -344,8 +344,6 @@ def evaluate_batch(
             "gt_classes": target_labels.clone().numpy(),
         }
 
-        breakpoint()
-
         if multiple_sgg_evaluator is not None:
             triplet_scores = torch.mul(pred_rel, sub_ob_scores.unsqueeze(-1))
             pred_rel_inds = argsort_desc(triplet_scores.cpu().clone().numpy())[
